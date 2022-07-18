@@ -1,0 +1,869 @@
+---
+title: "Effect of Environment Reward on Movement Vigor"
+author: "Shruthi Sukumar"
+date: "11/29/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library('ggplot2')
+require('reshape2')
+require(lmerTest)
+library('lme4')
+library(sjPlot)
+library(car)
+require(multcomp)
+```
+
+
+
+```{r data, echo=FALSE}
+
+st.err <- function(x) {
+  sd(x)/sqrt(length(x))
+}
+
+data = read.csv(file='../foraging_reward_main.csv')
+data$Probe <- as.factor(data$Probe)
+data$Env <- as.factor(data$Env)
+data$Subj_id <- as.factor(data$Subj_id)
+data$Order <- as.factor(data$Order)
+data$travel_scale = data$travel_duration/1000
+data$movement_scale = data$movement_duration/1000
+data$harvest_scale = data$harvest_duration/1000
+data = data[data$Subj_id !=0,]
+subj_arr = unique(data$Subj_id)
+
+data$trial_scale = numeric(nrow(data))
+for (s in subj_arr){
+  for (e in 0:1){
+    trial_max = max(data$Trial[data$Subj_id==s & data$Env==e], na.rm = TRUE)
+    data$trial_scale[data$Subj_id==s & data$Env==e] = data$Trial[data$Subj_id==s & data$Env==e]/trial_max
+  }
+}
+
+data$pk_vel_out = numeric(nrow(data))
+data$reward = numeric(nrow(data))
+data$reward[data$Env==0] = 10
+data$reward[data$Env==1] = 50
+data$reward[data$Probe==1]=30 
+
+for (s in subj_arr) {
+  
+  pv_avg = mean(data$pk_vel[data$Subj_id==s], na.rm=TRUE)
+  ts_avg = mean(data$travel_scale[data$Subj_id==s], na.rm=TRUE)
+ 
+  for (e in 0:1){
+     
+    pv_env_avg = mean(data$pk_vel[data$Subj_id==s & data$Env==e], na.rm=TRUE)
+    pv = data$pk_vel[data$Subj_id==s & data$Env==e]
+    pv_out = append(pv[c(2:length(pv))], 0)
+    data$pk_vel_out[data$Subj_id==s & data$Env==e] <- pv_out
+    data$pv_out_norm[data$Subj_id==s & data$Env==e] = data$pk_vel_out[data$Subj_id==s & data$Env==e]/pv_avg
+    data$pv_norm[data$Subj_id == s & data$Env == e] = data$pk_vel[data$Subj_id==s & data$Env==e]/pv_avg
+    data$ts_norm[data$Subj_id == s & data$Env == e] = data$travel_scale[data$Subj_id==s & data$Env==e]/ts_avg
+    data$pv_env_norm[data$Subj_id == s & data$Env == e] = data$pk_vel[data$Subj_id==s & data$Env==e]/pv_env_avg
+    
+  }
+  
+}
+
+```
+
+## Peak velocity and environment reward 
+
+Because the experiment is time limited we have different number of trials per environment we will used LMER for determining the effects. 
+
+```{r pv_lmer, echo=FALSE}
+mdl_pv = lmer(pk_vel~ Env*Probe + trial_scale +(1|Subj_id), data= data )
+
+summary(mdl_pv)
+plot_model(mdl_pv, type= "diag")
+plot_model(mdl_pv, type= "pred")
+plot_model(mdl_pv, type= "int")
+
+confint(mdl_pv)
+```
+
+## Contrast Analysis for determining the differences not explained by the simple interaction signficance
+
+```{r}
+
+## Difference between probes - Env1+Env1:Probe1=0
+## Difference between probe and non probe in high effort env : Probe1+Env1:Probe1
+
+lh <-glht(mdl_pv, linfct = c("Probe1+Env1:Probe1=0", "Env1+Env1:Probe1=0"))
+summary(lh)
+
+confint(lh)
+
+```
+
+## Stats for travel duration
+
+```{r}
+mdl_travel = glmer(travel_scale~ Env*Probe + trial_scale +(1|Subj_id), data= data, family = Gamma(link="log") )
+
+summary(mdl_travel)
+plot_model(mdl_travel, type= "diag")
+plot_model(mdl_travel, type= "pred")
+plot_model(mdl_travel, type= "int")
+```
+## Contrast Analysis
+
+```{r}
+## Difference between probes - Env1+Env1:Probe1=0
+## Difference between probe and non probe in high effort env : Probe1+Env1:Probe1
+
+lh <-glht(mdl_travel, linfct = c("Probe1+Env1:Probe1=0", "Env1+Env1:Probe1=0"))
+summary(lh)
+```
+
+
+## Visualizing change in peak velocity
+
+We will plot the differences in peak velocity between the two environments; green lines represent probe trials and red represents non-probe trials. 
+
+
+```{r}
+agg_subj = aggregate(data=data, cbind(pk_vel, travel_scale, harvest_duration, grip_count, pk_acc_rep, avg_pk_fr, avg_hrt) ~ Env + Subj_id+Probe, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=data, cbind(pk_vel, travel_scale, harvest_duration, grip_count, pk_acc_rep, avg_pk_fr, avg_hrt) ~ Env + Subj_id +Probe, st.err )
+varlist = c('pk_vel', 'travel_scale','harvest_duration','grip_count', 'pk_acc_rep', 'avg_pk_fr', 'avg_hrt')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+head(agg_subj)
+
+ggplot(data=agg_subj )+geom_line(aes(x= factor(Env), y=pk_vel,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=pk_vel_min,ymax=pk_vel_max, color= factor(Probe)),width=0.0)+
+  facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Peak velocity')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+# Individual effect on travel duration
+```{r}
+ggplot(data=agg_subj )+geom_line(aes(x= factor(Env), y= travel_scale,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=travel_scale_min,ymax=travel_scale_max, color= factor(Probe)),width=0.0)+
+  facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Travel Duration')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+
+
+# Overall effect on peak velocity 
+
+```{r}
+agg_avg = aggregate(data=agg_subj, cbind(pk_vel, travel_scale, harvest_duration, grip_count, pk_acc_rep,avg_pk_fr, avg_hrt) ~ Env +Probe, mean )
+cnames = colnames(agg_avg)
+agg_sd_avg = aggregate(data=agg_subj, cbind(pk_vel, travel_scale, harvest_duration, grip_count,pk_acc_rep,avg_pk_fr, avg_hrt) ~ Env + Probe, st.err )
+varlist = c('pk_vel', 'travel_scale','harvest_duration','grip_count','pk_acc_rep','avg_pk_fr', 'avg_hrt')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_avg = cbind.data.frame(agg_avg, agg_avg[v] - agg_sd_avg[v], agg_avg[v] + agg_sd_avg[v])
+  cnames = c(cnames, min_varname, max_varname)
+  2
+}
+
+colnames(agg_avg) <- cnames
+
+head(agg_avg)
+
+ggplot(data=agg_avg )+geom_line(aes(x= factor(Env), y=pk_vel,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=pk_vel_min,ymax=pk_vel_max, color= factor(Probe)),width=0.0)+
+  xlab('Env')+ylab('Peak velocity')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+```
+## peak velocity with respect to reward
+
+```{r}
+htime_agg_subj = aggregate(data=data, cbind(pk_vel, pv_norm, ts_norm,pv_env_norm) ~ Env+ Probe+ reward+Subj_id, mean)
+htime_agg1 = aggregate(data= htime_agg_subj , cbind(pk_vel, pv_norm, ts_norm,pv_env_norm) ~ Env+ Probe+ reward , mean)
+cnames = colnames(htime_agg1)
+htime_err1 = aggregate(data= htime_agg_subj , cbind(pk_vel, pv_norm,ts_norm, pv_env_norm) ~ Env+ Probe+ reward, st.err)
+varlist = c('pk_vel','pv_norm','ts_norm', 'pv_env_norm')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  htime_agg1 = cbind.data.frame(htime_agg1, htime_agg1[v] - htime_err1[v], htime_agg1[v] + htime_err1[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(htime_agg1) <- cnames
+
+ggplot(data= htime_agg1)+geom_line(aes(x= reward, y = pk_vel, color=factor(Env) ))+
+  geom_errorbar(aes( x= reward,ymin=pk_vel_min, ymax= pk_vel_max, color = factor(Env)), width = 0)+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+```
+## Normalized peak velocity plot
+
+```{r}
+
+th <- theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+pv_rewd <- ggplot(data= htime_agg1)+geom_line(aes(x= factor(reward), y = pv_norm, color=factor(Env),
+                                                  group = factor(Env) ),position=position_dodge(width=0.2))+
+  geom_errorbar(aes( x= factor(reward),ymin= pv_norm_min, ymax= pv_norm_max, color = factor(Env)),
+                position=position_dodge(width=0.2), width = 0)+
+  ylab('Normalized Peak Velocity')+xlab('Reward')+
+  geom_hline(aes(yintercept= 1.0),linetype="dashed")+th
+  
+pv_rewd
+fn = file.path('..','plots','pv_reward.pdf',fsep='/' )
+ggsave(filename=fn,plot = pv_rewd , device="pdf", width=4, height = 6 )
+
+```
+## Normalized travel duration
+
+```{r}
+ts_rewd <- ggplot(data= htime_agg1)+geom_line(aes(x= factor(reward), y = ts_norm, color=factor(Env),
+                                                  group = factor(Env) ),position=position_dodge(width=0.2))+
+  geom_errorbar(aes( x= factor(reward),ymin= ts_norm_min, ymax= ts_norm_max, color = factor(Env)),
+                position=position_dodge(width=0.2), width = 0)+
+  ylab('Normalized Travel Duration')+xlab('Reward')+
+  geom_hline(aes(yintercept= 1.0),linetype="dashed")+th
+  
+ts_rewd
+fn = file.path('..','plots','ts_reward.pdf',fsep='/' )
+ggsave(filename=fn,plot = ts_rewd , device="pdf", width=4, height = 6 )
+```
+
+
+## Normalizing peak velocity by average within envrionment to check for within envrionment effects
+
+```{r}
+ggplot(data= htime_agg1)+geom_line(aes(x= reward, y = pv_env_norm, color=factor(Env) ))+
+  geom_errorbar(aes( x= reward,ymin= pv_env_norm_min, ymax= pv_env_norm_max, color = factor(Env)), width = 0)+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+
+
+## Harvest duration as a metric
+
+```{r}
+
+ggplot(data=agg_avg )+geom_line(aes(x= factor(Env), y=harvest_duration,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=harvest_duration_min,ymax=harvest_duration_max, color= factor(Probe)),width=0.0)+
+  xlab('Env')+ylab('Harvest Duration')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+
+```
+
+
+## Peak acceleration as a vigor metric
+
+Check if peak acceleration was statistically modulated by environment reward. 
+
+```{r}
+mdl = lmer(pk_acc_rep~ Env*Probe+trial_scale +(1|Subj_id), data= data )
+
+# ss <- getME(mdl, c("theta","fixef"))
+# mdl2 <- update(mdl, start=ss)
+
+summary(mdl)
+plot_model(mdl, type= "diag")
+plot_model(mdl, type= "pred")
+plot_model(mdl, type= "int")
+
+```
+
+## Contrast Analysis for determining the differences not explained by the simple interaction signficance
+
+```{r}
+lh <-glht(mdl, linfct = c("Probe1+Env1:Probe1=0", "Env1+Env1:Probe1=0"))
+summary(lh)
+```
+
+
+## Visualizing peak acceleration 
+
+```{r}
+ggplot(data=agg_avg )+geom_line(aes(x= factor(Env), y=pk_acc_rep,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=pk_acc_rep_min,ymax=pk_acc_rep_max, color= factor(Probe)),width=0.0)+
+  xlab('Env')+ylab('Peak Acceleration')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+## Peak Acceleration by subject
+
+```{r}
+ggplot(data=agg_subj )+geom_line(aes(x= factor(Env), y=pk_acc_rep,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=pk_acc_rep_min,ymax=pk_acc_rep_max, color= factor(Probe)),width=0.0)+
+  facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Peak Acceleration')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+
+
+
+## Grip count Stats 
+
+Number of times subjects chose to grip within a patch before leaving to the next patch. 
+
+```{r}
+
+mdl_gc = glmer(grip_count~ Env*Probe +(1|Subj_id), data= data, family = poisson(link="log") )
+
+
+summary(mdl_gc)
+plot_model(mdl_gc, type= "diag")
+plot_model(mdl_gc, type= "pred")
+plot_model(mdl_gc, type= "int")
+
+
+```
+
+
+## Visualizing grip count
+
+```{r}
+
+ggplot(data=agg_subj )+geom_line(aes(x= factor(Env), y=grip_count,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=grip_count_min,ymax=grip_count_max, color= factor(Probe)),width=0.0)+
+  facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Grip Count')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+
+```
+
+## subject average for grip count
+
+```{r}
+ggplot(data=agg_avg )+geom_line(aes(x= factor(Env), y=grip_count,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=grip_count_min,ymax=grip_count_max, color= factor(Probe)),width=0.0)+
+  xlab('Env')+ylab('Grip Count')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+
+## Grip count Stats 
+
+Number of times subjects chose to grip within a patch before leaving to the next patch. 
+
+```{r}
+mdl_gc = glmer(berries~ Env*Probe +(1|Subj_id), data= data, family = poisson(link="log") )
+
+
+summary(mdl_gc)
+plot_model(mdl_gc, type= "diag")
+plot_model(mdl_gc, type= "pred")
+plot_model(mdl_gc, type= "int")
+
+```
+## Contrast Analysis for determining the differences not explained by the simple interaction signficance
+
+```{r}
+lh <-glht(mdl_gc, linfct = c("Probe1+Env1:Probe1=0", "Env1+Env1:Probe1=0"))
+summary(lh)
+```
+
+## Harvest Duration stats
+
+```{r}
+
+mdl_hs = glmer(harvest_scale~ Env*Probe +(1|Subj_id), data= data, family = Gamma(link="log") )
+
+
+summary(mdl_hs)
+plot_model(mdl_hs, type= "diag")
+plot_model(mdl_hs, type= "pred")
+plot_model(mdl_hs, type= "int")
+
+# confint(mdl_hs)
+
+```
+
+## Contrast Analysis for determining the differences not explained by the simple interaction signficance
+
+```{r}
+lh <-glht(mdl_hs, linfct = c("Probe1+Env1:Probe1=0", "Env1+Env1:Probe1=0"))
+summary(lh)
+```
+
+
+
+## Average peak force rate 
+
+```{r}
+ggplot(data=agg_avg )+geom_line(aes(x= factor(Env), y=avg_pk_fr,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=avg_pk_fr_min,ymax=avg_pk_fr_max, color= factor(Probe)),width=0.0)+
+  xlab('Env')+ylab('Average Peak Force Rate')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+## Avg pk force rate 
+
+```{r}
+
+ggplot(data=agg_subj )+geom_line(aes(x= factor(Env), y=avg_pk_fr,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=avg_pk_fr_min,ymax=avg_pk_fr_max, color= factor(Probe)),width=0.0)+
+  facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Average Peak Force Rate')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+```
+
+
+## Avg Grip ramp up duration 
+
+```{r}
+ggplot(data=agg_avg )+geom_line(aes(x= factor(Env), y=avg_hrt,group = factor(Probe), color= factor(Probe)))+
+  geom_errorbar(aes(x= factor(Env), ymin=avg_hrt_min,ymax=avg_hrt_max, color= factor(Probe)),width=0.0)+
+  xlab('Env')+ylab('Average Grip Ramp up duration')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+
+
+## Trial series
+
+```{r}
+agg_subj = aggregate(data=data, cbind(pk_vel,pk_vel_out,pv_norm, travel_scale, grip_count,berries) ~ Env + Trial, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=data, cbind(pk_vel,pk_vel_out,pv_norm, travel_scale, grip_count, berries) ~ Env + Trial, st.err )
+varlist = c('pk_vel','pk_vel_out','pv_norm', 'travel_scale','grip_count','berries')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+head(agg_subj)
+
+agg_subj = agg_subj[agg_subj$Trial <= 100,]
+
+min_val = min(agg_subj$grip_count_min)
+max_val = max(agg_subj$grip_count_max)
+
+
+ggplot(data=agg_subj )+geom_line(aes(x= Trial, y=grip_count, color = factor(Env)))+
+  geom_ribbon(aes(x= Trial, ymin=grip_count_min,ymax= grip_count_max, fill =factor(Env)), alpha = 0.1)+
+  # facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Grip Count')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())+ 
+  annotate("rect", xmin=21,xmax=30,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+     annotate("rect", xmin=71,xmax=80,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+  # annotate("rect", xmin=121,xmax=130,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+
+  # annotate("rect", xmin=171,xmax=180,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+```
+
+
+## Total number of berries
+```{r}
+min_val = min(agg_subj$berries_min)
+max_val = max(agg_subj$berries_max)
+
+
+ggplot(data=agg_subj )+geom_line(aes(x= Trial, y=berries, color = factor(Env)))+
+  geom_ribbon(aes(x= Trial, ymin=berries_min,ymax=berries_max, fill =factor(Env)), alpha = 0.1)+
+  # facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Berries')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())+ 
+  annotate("rect", xmin=21,xmax=30,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+     annotate("rect", xmin=71,xmax=80,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+  # annotate("rect", xmin=121,xmax=130,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+
+  # annotate("rect", xmin=171,xmax=180,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+```
+
+
+## peak velocity trial series 
+```{r}
+
+min_val = min(agg_subj$pk_vel_min)
+max_val = max(agg_subj$pk_vel_max)
+
+
+ggplot(data=agg_subj )+geom_line(aes(x= Trial, y=pk_vel, color = factor(Env)))+
+  geom_ribbon(aes(x= Trial, ymin=pk_vel_min,ymax=pk_vel_max, fill =factor(Env)), alpha = 0.1)+
+  # facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Peak Velocity')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())+ 
+  annotate("rect", xmin=21,xmax=30,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+     annotate("rect", xmin=71,xmax=80,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+
+
+```
+
+## Normalized peak velocity 
+
+```{r}
+min_val = min(agg_subj$pv_norm_min)
+max_val = max(agg_subj$pv_norm_max)
+
+
+ggplot(data=agg_subj )+geom_line(aes(x= Trial, y= pv_norm, color = factor(Env)))+
+  geom_ribbon(aes(x= Trial, ymin= pv_norm_min,ymax= pv_norm_max, fill =factor(Env)), alpha = 0.1)+
+  # facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Normalized Peak Velocity')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())+ 
+  annotate("rect", xmin=21,xmax=30,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+     annotate("rect", xmin=71,xmax=80,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+# +
+#   annotate("rect", xmin=121,xmax=130,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+
+#   annotate("rect", xmin=171,xmax=180,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+
+
+```
+
+
+## Peak force rate calculations
+
+```{r}
+agg_subj = aggregate(data=data, cbind(avg_pk_fr, avg_hrt) ~ Env + Trial, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=data, cbind(avg_pk_fr, avg_hrt) ~ Env + Trial, st.err )
+varlist = c('avg_pk_fr','avg_hrt')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+head(agg_subj)
+
+agg_subj = agg_subj[agg_subj$Trial <= 100,]
+
+min_val = min(agg_subj$avg_pk_fr_min)
+max_val = max(agg_subj$avg_pk_fr_max)
+
+
+ggplot(data=agg_subj )+geom_line(aes(x= Trial, y=avg_pk_fr, color = factor(Env)))+
+  geom_ribbon(aes(x= Trial, ymin=avg_pk_fr_min,ymax= avg_pk_fr_max, fill =factor(Env)), alpha = 0.1)+
+  # facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Average peak force rate')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())+ 
+  annotate("rect", xmin=21,xmax=30,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+     
+  annotate("rect", xmin=71,xmax=80,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+
+  annotate("rect", xmin=121,xmax=130,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+
+  annotate("rect", xmin=171,xmax=180,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+```
+## Grip Ramp Up duration
+
+```{r}
+
+min_val = min(agg_subj$avg_hrt_min)
+max_val = max(agg_subj$avg_hrt_max)
+
+ggplot(data=agg_subj )+geom_line(aes(x= Trial, y=avg_hrt, color = factor(Env)))+
+  geom_ribbon(aes(x= Trial, ymin=avg_hrt_min,ymax= avg_hrt_max, fill =factor(Env)), alpha = 0.1)+
+  # facet_wrap(~Subj_id, scales = "free")+
+  xlab('Env')+ylab('Average grip ramp up duration')+
+  theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())+ 
+  annotate("rect", xmin=21,xmax=30,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+     
+  annotate("rect", xmin=71,xmax=80,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+
+  annotate("rect", xmin=121,xmax=130,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")+
+  annotate("rect", xmin=171,xmax=180,ymin= min_val, ymax= max_val, alpha=0.1,fill="red")
+```
+## Reward over the course of trials (each subject  is a point)
+
+```{r}
+
+ggplot(data=data)+ geom_point(aes(x = Trial, y= berries, color=factor(Env) ))+
+  geom_line(aes(x=Trial, y= berries, color=factor(Env) ))+
+  facet_wrap(~Subj_id, scales = "free")+
+  xlab('Trial #')+ylab(' Berry')
+
+
+```
+## Subject level analysis of peak velocity with respect to trial number
+
+```{r}
+
+ggplot(data= data)+ geom_line(aes(x=Trial, y= pk_vel, color= factor(Env)))+
+  facet_wrap(~Subj_id, scales="free")+
+  xlab('Trial')+ylab('Peak Velocity(m/s)')
+
+```
+
+## Focussing on probe differences
+
+```{r}
+
+var.err <- function(x) {
+  var(x)/length(x)
+}
+
+
+prb_dat = data[data$Probe==1,]
+htime_agg_subj = aggregate(data=prb_dat,pk_vel ~ Env+ Probe+Subj_id, mean)
+cnames = colnames(htime_agg_subj)
+htime_err1 = aggregate(data=prb_dat ,pk_vel ~ Env+ Probe+ Subj_id, var.err)
+varlist = c('pk_vel')
+
+
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  htime_agg_subj = cbind.data.frame(htime_agg_subj, htime_agg_subj[v] - htime_err1[v], htime_agg_subj[v] + htime_err1[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(htime_agg_subj) <- cnames
+
+htime_agg_subj$pv_diff = numeric(nrow(htime_agg_subj))
+htime_err1$pv_diff = numeric(nrow(htime_err1))
+subj_arr = unique(data$Subj_id)
+
+for(s in subj_arr) {
+  htime_agg_subj$pv_diff[ htime_agg_subj$Subj_id==s] = htime_agg_subj$pk_vel[htime_agg_subj$Subj_id==s & htime_agg_subj$Env==1] - htime_agg_subj$pk_vel[htime_agg_subj$Subj_id==s & htime_agg_subj$Env==0]
+  htime_err1$pv_diff[ htime_err1$Subj_id==s] = htime_err1$pk_vel[htime_err1$Subj_id==s & htime_err1$Env==1] + htime_err1$pk_vel[htime_err1$Subj_id==s & htime_err1$Env==0]
+}
+htime_env_subj = htime_agg_subj[htime_agg_subj$Env==0,]
+
+
+htime_env_err = htime_err1[htime_agg_subj$Env==0,]
+
+mean_pv_subjs = mean(htime_env_subj$pk_vel)
+ser_pv_subjs = st.err(htime_env_subj$pk_vel)
+
+mean_pd_subjs = mean(htime_env_subj$pv_diff)
+ser_pd_subjs = st.err(htime_env_subj$pv_diff)
+
+
+htime_env_subj$pv_diff_min = numeric(nrow(htime_env_subj))
+htime_env_subj$pv_diff_max = numeric(nrow(htime_env_subj))
+
+htime_env_subj$pv_diff_min = htime_env_subj$pv_diff - sqrt(htime_env_err$pv_diff)
+htime_env_subj$pv_diff_max = htime_env_subj$pv_diff + sqrt(htime_env_err$pv_diff)
+
+
+htime_env_subj = subset(htime_env_subj, select = -c(Env,Probe, pk_vel, pk_vel_min,pk_vel_max))
+htime_env_subj$facet = numeric(nrow(htime_env_subj))
+all_row = data.frame(Subj_id = 'All', pv_diff = mean_pd_subjs, pv_diff_min = mean_pd_subjs - ser_pd_subjs, pv_diff_max=  
+                       mean_pd_subjs+ ser_pd_subjs, facet = 1)
+htime_env_subj = rbind(htime_env_subj,all_row )
+
+pv_diff_subj <- ggplot(data=htime_env_subj)+geom_bar(aes(x=reorder(Subj_id, -pv_diff), y = pv_diff), stat="identity", fill="#9AA4D3") +
+  geom_errorbar(aes(x=reorder(Subj_id, -pv_diff), ymin = pv_diff_min, ymax=pv_diff_max),width=0.0)+
+  facet_wrap(~facet,scales = "free_x",ncol=2)+
+  th+
+  xlab('Subject #')+ylab(expression(Delta~Peak~Velocity))
+
+pv_diff_subj
+
+fn = file.path('..','plots','pv_diff_subj.pdf',fsep='/' )
+ggsave(filename=fn,plot = pv_diff_subj , device="pdf", width=8, height = 6 )
+
+```

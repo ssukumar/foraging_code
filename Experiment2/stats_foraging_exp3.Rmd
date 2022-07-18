@@ -1,0 +1,1186 @@
+---
+title: "Foraging Uncertain Rewards Stats only---Naive subjects"
+author: "Shruthi Sukumar"
+date: "2/15/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# include required libraries
+library('ggplot2')
+require('reshape2')
+require(lmerTest)
+library('lme4')
+library(sjPlot)
+library('pwr')
+library('dplyr')
+library('car')
+# library('knitr')
+# knit2html("file")
+
+```
+
+```{r dataframe_gen, echo=FALSE, results = 'hide'}
+
+st.err <- function(x) {
+  sd(x)/sqrt(length(x))
+}
+
+data = read.csv(file='../foraging_reward_new.csv')
+data$Subj_id=as.factor(data$Subj_id)
+
+
+data$travel_scale = data$travel_duration/1000
+data$hd_scale = data$harvest_duration/1000
+data$travel_scale[is.nan(data$travel_duration)] <-0
+data$hd_scale[is.nan(data$harvest_duration)] <-0 
+
+data$movement_scale = data$movement_duration/1000
+data = data[data$Subj_id !=0,]
+subj_arr = unique(data$Subj_id)
+data$reward = data$alpha_vals #non-factor
+data$alpha_vals= as.factor(data$alpha_vals)
+
+for (s in subj_arr) {
+  
+  pv_avg = mean(data$pk_vel[data$Subj_id==s], na.rm=TRUE)
+  hd_avg = mean(data$harvest_duration[data$Subj_id==s], na.rm=TRUE)
+  for (e in 0:1){
+    
+    pv = data$pk_vel[data$Subj_id==1 & data$Env==e]
+    pv_out = append(pv[c(2:length(pv))], NA_real_)
+    data$pk_vel_out[data$Subj_id==s & data$Env==e] <- pv_out
+    data$pv_norm[data$Subj_id==s & data$Env==e] = data$pk_vel[data$Subj_id==s & data$Env==e]/pv_avg
+    data$hd_norm[data$Subj_id==s & data$Env==e] = data$harvest_duration[data$Subj_id==s & data$Env==e]/hd_avg
+
+  }
+  
+}
+
+data_tmp <- data %>% group_by(Subj_id, Env) %>% mutate(trial_scale = Trial/max(Trial,na.rm=TRUE), trial_bin = as.factor(round(Trial/max(Trial,na.rm=TRUE), 1)), ord_env = if_else(Order==1, 1 - as.double(Env) , as.double(Env)), trial_bin_ord = if_else( Order!=Env,1.1+round(Trial/max(Trial,na.rm=TRUE), 1),round(Trial/max(Trial,na.rm=TRUE), 1)   ),  trial_bin_ord_c = if_else( Order!=Env,1+round(Trial/max(Trial,na.rm=TRUE), 3),round(Trial/max(Trial,na.rm=TRUE), 3)   )  )
+data_tmp$trial_bin_ord = as.factor(data_tmp$trial_bin_ord)
+data <- data_tmp
+
+
+# data_tmp <- data %>% group_by(Subj_id) %>% mutate(trial_bin_ord = as.factor( if_else(ord_env==1, as.numeric(trial_bin)*2, as.numeric(trial_bin))))
+# data <- data_tmp
+# Trial scale binned 
+
+data$Env <- as.factor(data$Env)
+data$Subj_id <- as.factor(data$Subj_id)
+data$Order <- as.factor(data$Order)
+data$ord_labels <-character(nrow(data))
+data$ord_labels[data$Order==0] <- "Low Rewd First"
+data$ord_labels[data$Order==1] <- "High Rewd First"
+data$trial_env_ord = data$trial_scale + data$ord_env
+data$berries[is.nan(data$berries)] <-0
+data_tmp <- data %>% group_by(Subj_id,Env) %>% mutate(cumul_berries = cumsum(berries) )
+data <-data_tmp
+data$cumul_berries_scale = data$cumul_berries/10000
+# data$travel_scale[is.nan(data$travel_scale)] =0
+# data$travel_scale[is.nan(data$travel_scale)] =0
+
+data_tmp <- data %>% group_by(Subj_id, Env) %>% mutate(cumul_rate= cumul_berries/(cumsum(hd_scale)+cumsum(travel_scale) ))
+data <-data_tmp
+data_tmp <- data %>% group_by(Subj_id) %>% arrange(trial_bin_ord_c, by_group=TRUE) %>% mutate(emp_rate = cumsum(berries)/ (cumsum(hd_scale) + cumsum(travel_scale) )) 
+data <- data_tmp
+
+
+data$travel_scale[is.nan(data$travel_duration)] <- NA
+data$hd_scale[is.nan(data$harvest_duration)] <-NA 
+## Set ggplot theme
+data_mid = data[data$mid_15_trial==1,]
+
+
+th <- theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        #legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+
+
+# agg_aov <- aggregate(data=data_mid, cbind(pk_vel,pv_norm,hd_scale))
+
+
+```
+
+
+
+
+
+## Hypotheses of the theorem:
+
+1. Harvest duration will increase for a given patch in the low reward environment as opposed to the high reward environment. Within an environment, harvest duration will increase. 
+
+2. Peak velocity will decrease in the low reward environment as opposed to the high reward environment. 
+
+## Experiment overview
+
+Subjects spend 20 minutes each in the low and high reward environment where the upcoming patch information is occluded and they are not explicitly told what kind of environment they're in. 
+
+First, we take a look at the statistical effects in vigor. Here, we use peak velocity to represent vigor and we are looking at aggregate performance in the middle 15 minutes of the environment. 
+
+
+<!-- total accumulated reward instead of time.  -->
+<!-- outlier analysis to justify removing 611 -->
+<!-- familiarizaiton as baseline that i normalize to. can justify mixed effects   -->
+
+
+## Heirarchical modelling of the peak velocity data. Systematically introducing random and fixed effects by comparing the AIC scores/ 
+
+```{r pv_subj_random_eff, echo=FALSE}
+mdl_pv = lmer(data=data, log(pk_vel)~1 + (1|Subj_id), REML=FALSE)
+plot_model(mdl_pv, type="diag")
+summary(mdl_pv)
+# plot_model(mdl_pv, type="int")
+plot_model(mdl_pv, type="pred")
+
+# vif(mdl_pv_mid)
+```
+```{r pv_random_eff_ord, echo=FALSE}
+
+mdl_ord <- lmer(data=data, pk_vel~ 1+ (1|Order/Subj_id),REML=FALSE)
+
+#model assumptions
+plot_model(mdl_ord, type="diag")
+
+summary(mdl_ord)
+
+```
+
+Ok an intercept with nested random intercepts for order and subject gave us a singular fit. So i am going to exclude this from my comparison.
+But i do think this nesting is necessary, so i am going to add my fixed effects and retain this random nesting. My fixed effect is Environment (2 levels)
+
+```{r pv_env_eff_nested, echo=FALSE}
+
+mdl_pv_env <- lmer(data=data, pk_vel~ Env + (1 | Order/Subj_id))
+plot_model(mdl_pv_env, type="diag")
+summary(mdl_pv_env)
+
+```
+
+
+## Random slope per order
+
+```{r mdl_ord_slope_env, echo=FALSE}
+
+mdl_ord_env <-lmer(data=data, pk_vel~Env+ (1+Env|Order) + (1|Subj_id),REML=FALSE)
+plot_model(mdl_ord_env,type="diag")
+
+summary(mdl_ord_env)
+
+
+```
+## Just the effect of env, without order
+
+```{r mdl_env, echo=FALSE}
+
+mdl_env <-lmer(data=data, pk_vel~Env+  (1|Subj_id),REML=FALSE)
+plot_model(mdl_env,type="diag")
+
+summary(mdl_env)
+
+
+```
+## Inlcuding time as a fixed effect
+
+```{r pv_time_env, echo=FALSE}
+
+mdl_time_bin <-  lmer(data=data, pk_vel ~ Env * trial_bin_ord_c + (1|Subj_id), REML=FALSE)
+plot_model(mdl_time_bin, type="diag")
+
+summary(mdl_time_bin)
+
+```
+
+## Comparing the addition of time as an effect
+
+```{r model_comp, echo=FALSE}
+
+anova(mdl_time_bin, mdl_env)
+
+
+```
+
+
+Adding time as a fixed effect signficantly improves predictions. 
+
+Let us take a closer look at this model.
+Checking model assumptions and collinearity of the fixed effects 
+
+```{r mdl_bin_checks, echo=FALSE}
+
+# First checking model assumptions 
+plot_model(mdl_time_bin, type="diag")
+vif(mdl_time_bin)
+
+```
+Looks not too bad but the data appears slightly heteroscedastic and the variables collinear. 
+
+```{r transform_var_heterosc, echo=FALSE}
+mdl_pv_log = lmer(data=data, log(pk_vel) ~ Env*trial_bin_ord_c + (1|Subj_id) )
+plot_model(mdl_pv_log, type="diag")
+
+vif(mdl_pv_log)
+
+summary(mdl_pv_log)
+
+```
+
+Model comparisons between transformed and untransformed models
+
+```{r mdl_comp2, echo=FALSE}
+anova(mdl_time_bin, mdl_pv_log)
+
+```
+However, the factors are still too collinear. Let us remove the main effect of environment and see. 
+
+```{r vif_fix_log, echo=FALSE }
+
+mdl_log_inter <- lmer(data=data, log(pk_vel)~ trial_bin_ord_c + Env:trial_bin_ord_c + (1|Subj_id),REML=FALSE )
+
+plot_model(mdl_log_inter, type="diag")
+
+summary(mdl_log_inter)
+plot_model(mdl_log_inter, type="pred")
+plot_model(mdl_log_inter, type="int")
+
+vif(mdl_log_inter)
+
+```
+
+Looking at AIC scores, this model doesn't provide much of an improvement. Since I am interested in main environmental effects ,I'm going to throw that back in and then add order as a fixed effect. 
+
+```{r ord_effs_log, echo=FALSE}
+
+mdl_ord_fixed <- lmer(data=data, log(pk_vel)~Env* Order + (1|Subj_id) )
+
+plot_model(mdl_ord_fixed, type="diag")
+
+summary(mdl_ord_fixed)
+
+plot_model(mdl_ord_fixed, type="pred")
+plot_model(mdl_ord_fixed, type="int")
+
+
+vif(mdl_ord_fixed)
+
+
+```
+
+Compare this model to the trial bin model 
+
+```{r model_compare4, echo=FALSE}
+
+anova(mdl_time_bin, mdl_ord_fixed)
+
+```
+
+Time bin still does best. Let's try to put these together and see what happens
+
+```{r time_ord_fixed, echo=FALSE}
+
+mdl_time_ord_fixed <- lmer(data=data, log(pk_vel)~ Env*Order +Order*trial_bin_ord_c +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_time_ord_fixed, type="diag")
+summary(mdl_time_ord_fixed)
+
+plot_model(mdl_time_ord_fixed, type="pred")
+plot_model(mdl_time_ord_fixed, type="int")
+
+vif(mdl_time_ord_fixed)
+
+```
+
+## Look at cumul rate - empirical reward rate 
+
+```{r time_ord_fixed2, echo=FALSE}
+
+mdl_time_ord_fixed2 <- lmer(data=data, log(pk_vel)~ cumul_rate*Order +Order*trial_bin_ord_c +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_time_ord_fixed2, type="diag")
+summary(mdl_time_ord_fixed2)
+
+plot_model(mdl_time_ord_fixed2, type="pred")
+plot_model(mdl_time_ord_fixed2, type="int")
+
+vif(mdl_time_ord_fixed2)
+
+```
+
+
+
+
+compare this model to the time binned model alone
+
+```{r model_compare5,echo=FALSE}
+
+anova(mdl_time_bin, mdl_time_ord_fixed)
+
+```
+
+## Reward rate as predictor
+
+
+```{r rr_pred, echo=FALSE}
+
+mdl_pv_rr <- lmer(data=data, log(pk_vel)~ trial_bin_ord_c + cumul_rate +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_pv_rr, type="diag")
+summary(mdl_pv_rr)
+plot_model(mdl_pv_rr, type="pred")
+
+
+```
+
+## Reward rate as a an updated function
+
+```{r rr_update, echo=FALSE}
+alpha = 0.08
+data$rate_update <- numeric(nrow(data))
+data$rate_update[data$Trial==1 & data$ord_env ==0] = 30
+data$alpha_prev = numeric(nrow(data))
+data$alpha_prev[data$Trial==1] <-0
+
+# data$emp_rate <- numeric(nrow(data))
+
+for (s in  unique(data$Subj_id)){
+  for( e in 0:1 ){
+    
+    if (e==1){
+      data$rate_update[data$Trial==1 & data$Subj_id==s & data$ord_env ==e ] = data$rate_update[data$Trial==max(data$Trial[data$Subj_id==s & data$ord_env ==e-1]) & data$Subj_id==s & data$ord_env ==e-1 ]
+    }
+    
+    for (tr in 2:max(data$Trial[data$Subj_id==s & data$ord_env ==e])){
+            
+      # data$rate_update[data$Trial==tr & data$Subj_id==s & data$ord_env ==e ] = data$rate_update[data$Trial==tr-1 & data$Subj_id==s & data$ord_env ==e ] + alpha * (data$cumul_rate[data$Trial==tr & data$Subj_id==s & data$ord_env ==e ] - data$rate_update[data$Trial==tr-1 & data$Subj_id==s & data$ord_env ==e ])
+      
+      data$rate_update[data$Trial==tr & data$Subj_id==s & data$ord_env ==e ] = data$rate_update[data$Trial==tr-1 & data$Subj_id==s & data$ord_env ==e ] + alpha * (data$reward[data$Trial==tr & data$Subj_id==s & data$ord_env ==e ] - data$rate_update[data$Trial==tr-1 & data$Subj_id==s & data$ord_env ==e ])
+      
+      data$alpha_prev[data$Trial==tr & data$Subj_id==s & data$ord_env ==e ] = data$alpha_prev[data$Trial==tr-1 & data$Subj_id==s & data$ord_env ==e ]
+    }
+  }
+}
+
+## also try rate associated with patch alone for R_t
+## reward in the patch divided by (3 pulses for eg.)
+## use initial reward alone as Rt 
+
+ggplot(data=data) + geom_line(aes(x=Trial, y= rate_update, color=Env))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free" )+
+  xlab('Trial')+ylab('Reward Rate')+
+  theme_classic()
+
+ggplot(data=data) + geom_line(aes(x=trial_bin_ord_c, y= rate_update))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free" )+
+  xlab('Trial')+ylab('Reward Rate')+
+  theme_classic()
+```
+
+how to fit alpha by subject (assume ground truth)
+
+## Fit linear model according to dayan paper
+
+```{r rr_model_dayan, echo=FALSE}
+
+mdl_rr_upd <- lmer(data=data, log(pk_vel)~ trial_bin_ord_c + rate_update +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd, type="diag")
+summary(mdl_rr_upd)
+plot_model(mdl_rr_upd, type="pred")
+
+```
+
+
+## Predicting the next trial's peak velocity 
+
+```{r pv_out_rr, echo=FALSE}
+
+mdl_rr_upd2 <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c + rate_update +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd2, type="diag")
+summary(mdl_rr_upd2)
+plot_model(mdl_rr_upd2, type="pred")
+
+```
+
+
+## Looking at interactions with order  
+
+```{r pv_out_rr, echo=FALSE}
+
+mdl_rr_upd3 <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c + rate_update*Order +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd3, type="diag")
+summary(mdl_rr_upd3)
+plot_model(mdl_rr_upd3, type="pred")
+plot_model(mdl_rr_upd3, type="int")
+
+```
+
+
+
+```{r pv_out_rr, echo=FALSE}
+
+mdl_rr_upd4 <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + rate_update*Order +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd4, type="diag")
+summary(mdl_rr_upd4)
+plot_model(mdl_rr_upd4, type="pred")
+plot_model(mdl_rr_upd4, type="int")
+vif(mdl_rr_upd4)
+
+```
+
+```{r pv_out_rr5, echo=FALSE}
+
+mdl_rr_upd5 <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*rate_update +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd5, type="diag")
+summary(mdl_rr_upd5)
+plot_model(mdl_rr_upd5, type="pred")
+plot_model(mdl_rr_upd5, type="int")
+vif(mdl_rr_upd5)
+
+```
+
+
+```{r pv_out_rr, echo=FALSE}
+
+mdl_rr_upd5 <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + rate_update +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd5, type="diag")
+summary(mdl_rr_upd5)
+plot_model(mdl_rr_upd5, type="pred")
+plot_model(mdl_rr_upd5, type="int")
+vif(mdl_rr_upd5)
+
+```
+
+Order effect on rate update
+
+
+```{r rr_model_dayan, echo=FALSE}
+
+mdl_rr_upd <- lmer(data=data, log(pk_vel)~ trial_bin_ord_c + rate_update*Order +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd, type="diag")
+summary(mdl_rr_upd)
+plot_model(mdl_rr_upd, type="pred")
+
+plot_model(mdl_rr_upd, type="int")
+
+
+```
+
+Look at the outlying subject
+
+```{r outlier_dat, echo=FALSE}
+agg_aov_pv= aggregate(data=data_mid, pk_vel~Env+Subj_id+Trial,mean)
+
+ggplot(data=agg_aov_pv) +geom_line(aes(x=Trial,y=pk_vel, color=Subj_id))+
+  facet_wrap(~Env)+
+  theme_classic()
+
+
+```
+They seem to be speeding up mainly in the second environment.Therefore applying our best model so far to the data without that subject's data. 
+```{r dat_exclude, echo=FALSE}
+
+data_exc <- data %>% filter(Subj_id!=611)
+data_mid_exc = data_exc[data_exc$mid_15_trial==1,]
+
+print(unique(data_mid_exc$Subj_id))
+
+```
+
+
+```{r lmer_pv_mid_exclude611, echo=FALSE}
+mdl_pv_mid_exc = lmer(data=data_exc, log(pk_vel) ~Env*Order +Order*trial_bin_ord_c +(1|Subj_id)  , REML = FALSE )
+plot_model(mdl_pv_mid_exc, type="diag")
+summary(mdl_pv_mid_exc)
+plot_model(mdl_pv_mid_exc, type="int")
+vif(mdl_pv_mid_exc)
+
+```
+
+
+
+
+(sensitivity analysis removing one subject - likelihood ratio test to compare transform to untransform)
+ 
+Time seems to significantly increase peak velocity. Visualizing this data better: 
+
+Data seems to be heteroscedastic so let us try to use a normalized dependent variable
+
+First let's look at the histogram of normalized peak velocity
+
+## Visualizing the data 
+
+```{r aggregate_data_vis, echo=FALSE, results='hide'}
+agg_dat_subj = aggregate(data= data_mid, cbind(pk_vel, hd_scale, pv_norm)~ Env+Subj_id+ord_labels, mean)
+cnames = colnames(agg_dat_subj)
+
+agg_sd_subj = aggregate(data= data_mid, cbind(pk_vel, hd_scale,  pv_norm)~ Env+Subj_id+ord_labels, sd)
+
+varlist = c('pk_vel','hd_scale', 'pv_norm')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_dat_subj = cbind.data.frame(agg_dat_subj, agg_dat_subj[v] - agg_sd_subj[v], agg_dat_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_dat_subj) <- cnames
+```
+## Anova results for harvest duration
+
+```{r aov_hd, echo=FALSE}
+print('Anova results')
+agg_aov_hd = aggregate(data=data, hd_scale~Env+alpha_vals+Subj_id,mean)
+
+aov_hd <- with(data=agg_aov_hd, aov(hd_scale~Env*alpha_vals + Error(Subj_id)))
+summary(aov_hd)
+
+```
+
+
+## Iterative, stepwise regression for harvest duration
+```{r lmer_hd_mid, echo=FALSE}
+
+mdl_hd_env = lmer(data=data, hd_scale ~ Env*reward+ (1|Subj_id) ,REML=FALSE )
+plot_model(mdl_hd_env, type="diag")
+summary(mdl_hd_env)
+plot_model(mdl_hd_env, type="int")
+plot_model(mdl_hd_env, type="pred")
+
+
+```
+
+```{r hd_env_slope, echo=FALSE}
+
+data_exc428 = data[data$Subj_id!=428,]
+
+mdl_hd_env_slp = lmer(data=data, hd_scale ~ Env*reward+ (1+Env|Subj_id) ,REML=FALSE )
+plot_model(mdl_hd_env_slp, type="diag")
+summary(mdl_hd_env_slp)
+plot_model(mdl_hd_env_slp, type="int")
+plot_model(mdl_hd_env_slp, type="pred")
+
+
+```
+
+```{r exc428_1, echo=FALSE}
+mdl_hd_env_slp = lmer(data=data_exc428, hd_scale ~ Env*reward+ (1|Subj_id) ,REML=FALSE )
+plot_model(mdl_hd_env_slp, type="diag")
+summary(mdl_hd_env_slp)
+plot_model(mdl_hd_env_slp, type="int")
+plot_model(mdl_hd_env_slp, type="pred")
+
+```
+
+
+## Model ideas:
+1. Reward rate as predictor (with varying windows) - check window size 
+2. 
+
+homoscedasticity is still too high. Let us try to transform some of the variables
+
+```{r tranfrom_hd, echo=FALSE}
+
+data_tmp <- data %>% group_by(Subj_id,Env) %>% mutate(log_hd_scale = ifelse(harvest_duration==0,NA,log(hd_scale)), log_reward = log(reward), log10_hd = ifelse(harvest_duration==0,NA,log10(hd_scale)), log10_rewd = log10(reward), log2_hd = ifelse(harvest_duration==0,NA,log2(hd_scale)), hd_inv = ifelse(harvest_duration==0,NA,1/hd_scale),log10_pv = log10(pk_vel), log_pv = log(pk_vel))
+data <- data_tmp
+
+mdl_hd_tr = lmer(data=data, log_hd_scale ~ Env*reward+ (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_tr, type="diag")
+summary(mdl_hd_tr)
+plot_model(mdl_hd_tr, type="int")
+plot_model(mdl_hd_tr, type="pred")
+
+
+```
+
+
+# ```{r exc428_2, echo=FALSE}
+# mdl_hd_env_slp = lmer(data=data_exc428, hd_scale ~ Env*log10_rewd+ (1|Subj_id) ,REML=FALSE )
+# plot_model(mdl_hd_env_slp, type="diag")
+# summary(mdl_hd_env_slp)
+# plot_model(mdl_hd_env_slp, type="int")
+# plot_model(mdl_hd_env_slp, type="pred")
+# 
+# ```
+Significantly improves AIC, but there are a significant number of outliers. Let us log transform the reward as well
+
+
+```{r transform_hd_rewd, echo=FALSE}
+
+
+mdl_hd_re_tr = lmer(data=data, log_hd_scale ~ Env*log_reward+ (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_re_tr, type="diag")
+summary(mdl_hd_re_tr)
+plot_model(mdl_hd_re_tr, type="int")
+plot_model(mdl_hd_re_tr, type="pred")
+```
+Looks like one subject is really skewing the stats, namely subject 428. Let us exclude that subject's data and see
+
+
+```{r exclude428_hd, echo=FALSE}
+
+
+mdl_hd_re_tr = lmer(data=data, log_hd_scale ~ Env*log_reward+ (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_re_tr, type="diag")
+summary(mdl_hd_re_tr)
+plot_model(mdl_hd_re_tr, type="int")
+plot_model(mdl_hd_re_tr, type="pred")
+
+```
+The nonlinearity is not coming from them. How about excluding the first and last 2.5 minuts of the data.
+
+```{r}
+data_mid <- data[data$mid_15_trial==1,]
+
+mdl_hd_re_tr_mid = lmer(data=data_mid, log_hd_scale ~ Env*log_reward+ (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_re_tr_mid, type="diag")
+summary(mdl_hd_re_tr_mid)
+plot_model(mdl_hd_re_tr_mid, type="int")
+plot_model(mdl_hd_re_tr_mid, type="pred")
+
+
+```
+
+let's go back to the full dataset and add time as a component
+
+```{r time_add, echo=FALSE}
+mdl_hd_time_bin = lmer(data=data, log_hd_scale ~ Env*log_reward*trial_bin_ord_c + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_time_bin, type="diag")
+summary(mdl_hd_time_bin)
+plot_model(mdl_hd_time_bin, type="int")
+plot_model(mdl_hd_time_bin, type="pred")
+
+```
+
+log10 transform as opposed to ln
+
+
+```{r time_add, echo=FALSE}
+
+
+mdl_hd_time_bin = lmer(data=data, log10_hd ~ Env*reward*trial_bin_ord_c + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_time_bin, type="diag")
+summary(mdl_hd_time_bin)
+plot_model(mdl_hd_time_bin, type="int")
+plot_model(mdl_hd_time_bin, type="pred")
+vif(mdl_hd_time_bin)
+```
+
+adding just order info instead of time
+
+```{r ord_info_add ,echo=FALSE}
+
+mdl_hd_ord = lmer(data=data, log10_hd ~ Env*reward*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_ord, type="diag")
+summary(mdl_hd_ord)
+plot_model(mdl_hd_ord, type="int")
+plot_model(mdl_hd_ord, type="pred")
+
+vif(mdl_hd_ord)
+```
+
+Comparing the two models so far
+
+```{r mdl_hd_compare, echo=FALSE}
+
+anova(mdl_hd_time_bin, mdl_hd_ord)
+
+```
+
+The correlation between predictors is still pretty high. Let us look at a different mdodel
+
+```{r mdl_ord_time, echo=FALSE}
+
+mdl_hd_ord_time = lmer(data=data, log10_hd ~ Env*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_ord_time, type="diag")
+summary(mdl_hd_ord_time)
+plot_model(mdl_hd_ord_time, type="int")
+plot_model(mdl_hd_ord_time, type="pred")
+
+vif(mdl_hd_ord_time)
+
+```
+```{r mdl_ord_time, echo=FALSE}
+
+mdl_hd_ord_time = lmer(data=data, log10_hd ~ cumul_rate*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_ord_time, type="diag")
+summary(mdl_hd_ord_time)
+plot_model(mdl_hd_ord_time, type="int")
+plot_model(mdl_hd_ord_time, type="pred")
+
+vif(mdl_hd_ord_time)
+
+```
+
+```{r mdl_ord_time, echo=FALSE}
+
+mdl_hd_ord_time = lmer(data=data, log_hd_scale ~ Env*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_ord_time, type="diag")
+summary(mdl_hd_ord_time)
+plot_model(mdl_hd_ord_time, type="int")
+plot_model(mdl_hd_ord_time, type="pred")
+
+vif(mdl_hd_ord_time)
+
+```
+
+Much better VIFs but AICc is slightly worse
+
+Ok now let's look at whether alpha as a factor changes things instead of continuous reward.
+
+```{r mdl_alpha_factor, echo=FALSE}
+mdl_hd_alpha = lmer(data=data, log10_hd ~ Env*alpha_vals+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_alpha, type="diag")
+summary(mdl_hd_alpha)
+plot_model(mdl_hd_alpha, type="int")
+plot_model(mdl_hd_alpha, type="pred")
+
+vif(mdl_hd_alpha)
+```
+
+What if we retained reward as a continuous variable but log transformed it 
+
+```{r mdl_ord_time, echo=FALSE}
+
+mdl_hd_logrewd = lmer(data=data, log10_hd ~ Env*log10_rewd+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_logrewd, type="diag")
+summary(mdl_hd_logrewd)
+plot_model(mdl_hd_logrewd, type="int")
+plot_model(mdl_hd_logrewd, type="pred")
+
+vif(mdl_hd_logrewd)
+
+```
+
+Looking at how many values are less than 02
+
+```{r check_outliers , echo=FALSE}
+
+ggplot(data=data) + geom_histogram(aes(x=hd_scale,fill=Env),binwidth = 0.1)+
+  facet_wrap(~Subj_id, scales="free", nrow=2)+theme_classic()
+
+
+ggplot(data=data) + geom_histogram(aes(x=hd_inv,fill=Env))+
+  facet_wrap(~Subj_id, scales="free", nrow=2)+theme_classic()
+
+ggplot(data=data)+geom_histogram(aes(x=hd_scale,fill=Env),binwidth=0.5)+theme_classic()
+
+ggplot(data=data_exc428)+geom_histogram(aes(x=hd_scale,fill=Env),binwidth=0.5)+theme_classic()
+print(unique(data_exc428$Subj_id))
+
+ggplot(data=data_exc428)+geom_histogram(aes(x=log10_hd,fill=Env),binwidth=0.05)+theme_classic()
+print(unique(data_exc428$Subj_id))
+
+
+data_exc611 = data_exc428[data_exc428$Subj_id!=611,]
+ggplot(data=data_exc611)+geom_histogram(aes(x=log10_hd,fill=Env),binwidth=0.05)+theme_classic()
+
+data_mid_exc428 =data_exc428[data_exc428$mid_15_trial==1,]
+ggplot(data=data_mid_exc428)+geom_histogram(aes(x=log10_hd,fill=Env),binwidth=0.05)+theme_classic()
+
+
+data_mid_exc611 =data_exc611[data_exc611$mid_15_trial==1,]
+ggplot(data=data_mid_exc611)+geom_histogram(aes(x=log10_hd,fill=Env),binwidth=0.05)+theme_classic()
+
+
+
+data_mid_exc611 =data_exc611[data_exc611$mid_15_trial==1,]
+ggplot(data=data_mid_exc611)+geom_histogram(aes(x=log10_hd,fill=Env),binwidth=0.05)+theme_classic()
+
+ggplot(data=data_mid_exc611)+geom_histogram(aes(x=hd_scale,fill=Subj_id),binwidth=0.05)+theme_classic()
+
+```
+
+Ignore the two outlying subjects and look at the middle 15 minutes of data for the rest. 
+Do it without the log transform
+
+```{r exc_mid, echo=FALSE}
+
+mdl_hd_exc = lmer(data=data_mid_exc611, hd_scale ~ Env*reward+ (1|Subj_id) ,REML=FALSE )
+plot_model(mdl_hd_exc, type="diag")
+summary(mdl_hd_exc)
+plot_model(mdl_hd_exc, type="int")
+plot_model(mdl_hd_exc, type="pred")
+
+
+```
+
+
+How much does peak velocity and harvest duration explain changes in instantaneous reward rate
+
+
+```{r rr_change_pv, echo=FALSE}
+
+mdl_rr = lmer(data=data_mid, cumul_rate ~ hd_scale*pk_vel + Order*trial_bin_ord_c + (1|Subj_id))
+plot_model(mdl_rr, type="diag")
+plot_model(mdl_rr, type="pred")
+plot_model(mdl_rr, type="int")
+summary(mdl_rr)
+vif(mdl_rr)
+```
+## Exclude the one subject again and see
+
+
+```{r rr_log_transform, echo=FALSE}
+
+mdl_rr = lmer(data=data, log(cumul_rate) ~ hd_scale*pk_vel+ Order*trial_bin_ord_c + (1|Subj_id), REML=FALSE)
+plot_model(mdl_rr, type="diag")
+plot_model(mdl_rr, type="pred")
+plot_model(mdl_rr, type="int")
+summary(mdl_rr)
+vif(mdl_rr)
+```
+
+### best model so far
+
+```{r rr_log_transform, echo=FALSE}
+
+mdl_rr = lmer(data=data, log10(cumul_rate) ~ hd_scale*pk_vel + Env*reward + Order*trial_bin_ord_c + (1|Subj_id), REML=FALSE)
+plot_model(mdl_rr, type="diag")
+plot_model(mdl_rr, type="pred")
+plot_model(mdl_rr, type="int")
+summary(mdl_rr)
+vif(mdl_rr)
+```
+
+```{r rr_log_transform_preds, echo=FALSE}
+
+mdl_rr = lmer(data=data, log10(cumul_rate) ~ log10_hd* log10_pv+ Env*reward + trial_bin_ord_c*Order+ (1|Subj_id), REML=FALSE)
+plot_model(mdl_rr, type="diag")
+plot_model(mdl_rr, type="pred")
+plot_model(mdl_rr, type="int")
+summary(mdl_rr)
+vif(mdl_rr)
+```
+usign alpha vals instead of reward 
+
+```{r rr_log_transform_preds, echo=FALSE}
+
+mdl_rr = lmer(data=data, log10(cumul_rate) ~ log10_hd* log10_pv+ Env*alpha_vals+ Order*trial_bin_ord_c + (1|Subj_id), REML=FALSE)
+plot_model(mdl_rr, type="diag")
+plot_model(mdl_rr, type="pred")
+plot_model(mdl_rr, type="int")
+summary(mdl_rr)
+vif(mdl_rr)
+```
+
+
+```{r rr_log_transform_slp, echo=FALSE}
+
+mdl_rr = lmer(data=data, log10(cumul_rate) ~ hd_scale*pk_vel + Env*reward + Order*trial_bin_ord_c + (1+Env|Subj_id), REML=FALSE)
+plot_model(mdl_rr, type="diag")
+plot_model(mdl_rr, type="pred")
+plot_model(mdl_rr, type="int")
+summary(mdl_rr)
+vif(mdl_rr)
+```
+withoyt transforming predictors
+
+
+```{r rr_log_transform, echo=FALSE}
+
+mdl_rr = lmer(data=data, log10(cumul_rate) ~ hd_scale*pk_vel + Env*alpha_vals + Order*trial_bin_ord_c + (1|Subj_id), REML=FALSE)
+plot_model(mdl_rr, type="diag")
+plot_model(mdl_rr, type="pred")
+plot_model(mdl_rr, type="int")
+summary(mdl_rr)
+vif(mdl_rr)
+```
+
+## Individual rate of reward increase with time 
+
+If some subjects' reward rates were still improving, it means they didn't learn the task well. 
+
+
+```{r cumul_rate_subj, echo=FALSE}
+
+
+ggplot(data)+geom_line(aes(x=Trial, y=cumul_rate, color=Env, group=Env))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+ggplot(data=data)+geom_point(aes(x=Trial, y = hd_scale, color=Env, shape=alpha_vals))+
+  facet_wrap(ord_labels~Subj_id, scales="free",nrow=2)+theme_classic()
+
+ggplot(data=data)+geom_line(aes(x=Trial, y = pk_vel, color=Env))+
+  facet_wrap(ord_labels~Subj_id, scales="free",nrow=2)+theme_classic()
+
+
+```
+```{r melt_df, echo=FALSE}
+
+data_filt <- data %>% select(Subj_id, Env,Trial, pk_vel,ord_labels, hd_scale, cumul_rate)
+
+mdf = melt(data_filt, id.vars=c("Subj_id","Env","Trial","ord_labels"))
+
+
+ggplot(data=mdf) + geom_line(aes(x=Trial, y= value, linetype = variable, color=Env))+
+  facet_wrap(ord_labels~Subj_id, scales="free",nrow=2)+theme_classic()
+```
+
+## Rate of chnge of harvest duration and peak velocity
+
+```{r diff_hd_pv, echo=FALSE}
+
+data_tmp <- data %>% group_by(Subj_id,Env) %>% mutate(pv_rate = round( c(0,diff(pk_vel)),3) ,hd_rate = round( c(0,diff(hd_scale)),3) )
+# data <- data_tmp 
+
+
+```
+
+## write current dataframe to csv file 
+
+```{r write csv, echo=FALSE}
+
+write.csv(data, "df_from_R2.csv")
+
+```
+
+
+## Run statistical model from fitted values from matlab
+
+```{r read_df_, echo=FALSE}
+
+df.matlab = read.csv(file='df_from_matlab.csv')
+mdl_rr_upd6 <- lmer(data=df.matlab, log(pk_vel_out)~ trial_bin_ord_c*Order + rate_update_new +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd6, type="diag")
+summary(mdl_rr_upd6)
+plot_model(mdl_rr_upd6, type="pred")
+plot_model(mdl_rr_upd6, type="int")
+vif(mdl_rr_upd6)
+
+```
+
+## compare above model to empirical reward rate 
+
+```{r}
+mdl_rr_upd7 <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + cumul_rate +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd7, type="diag")
+summary(mdl_rr_upd7)
+plot_model(mdl_rr_upd7, type="pred")
+plot_model(mdl_rr_upd7, type="int")
+vif(mdl_rr_upd7)
+
+
+
+```
+
+## using beta with decay rate
+
+```{r}
+df.matlab = read.csv(file='df_from_matlab.csv')
+
+mdl_rr_upd8 <- lmer(data=df.matlab, log(pk_vel_out)~ trial_bin_ord_c*Order + cumul_rate_beta*Order +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_rr_upd8, type="diag")
+summary(mdl_rr_upd8)
+plot_model(mdl_rr_upd8, type="pred")
+plot_model(mdl_rr_upd8, type="int")
+vif(mdl_rr_upd8)
+
+```
+
+
+## Empirical reward rate 
+
+```{r emp_rr, echo=FALSE}
+
+ggplot(data= data) +geom_line(aes(x=trial_bin_ord_c, y= emp_rate))+
+facet_wrap(ord_labels~Subj_id, nrow= 2, scales="free")+
+  theme_classic()
+
+ggplot(data=data) + geom_line(aes(x= trial_bin_ord_c, y= pk_vel_out, color=emp_rate))+
+  facet_wrap(ord_labels~Subj_id , nrow =2 , scales= "free")+
+  theme_classic()
+
+ggplot(data=data) + geom_point(aes(x= emp_rate, y= pk_vel_out, color=emp_rate))+
+  facet_wrap(ord_labels~Subj_id , nrow =2 , scales= "free")+
+  theme_classic()
+
+ggplot(data= data) +geom_line(aes(x=trial_bin_ord_c, y= cumul_rate))+
+facet_wrap(ord_labels~Subj_id, nrow= 2, scales="free")+
+  theme_classic()
+
+# ggplot(data= df.matlab) +geom_line(aes(x=trial_bin_ord_c, y= rate_update_new))+
+# facet_wrap(ord_labels~Subj_id, nrow= 2, scales="free")+
+#   theme_classic()
+# 
+# ggplot(data=df.matlab) + geom_line(aes(x= trial_bin_ord_c, y= pk_vel_out, color=rate_update_new))+
+#   facet_wrap(ord_labels~Subj_id , nrow =2 , scales= "free")+
+#   theme_classic()
+
+ggplot(data= df.matlab) +geom_line(aes(x=trial_bin_ord_c, y= cumul_rate_beta))+
+facet_wrap(ord_labels~Subj_id, nrow= 2, scales="free")+
+  theme_classic()
+
+ggplot(data=df.matlab) + geom_line(aes(x= trial_bin_ord_c, y= pk_vel_out, color=cumul_rate_beta))+
+  facet_wrap(ord_labels~Subj_id , nrow =2 , scales= "free")+
+  theme_classic()
+
+```
+
+## Harvest duration and vigor models with reward rate as a predictor 
+
+
+1. Harvest Duration results 
+```{r emp_rr_hd, echo=FALSE}
+
+mdl_hd_emp_rr = lmer(data=data, log10_hd ~ emp_rate*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_emp_rr, type="diag")
+summary(mdl_hd_emp_rr)
+plot_model(mdl_hd_emp_rr, type="int")
+plot_model(mdl_hd_emp_rr, type="pred")
+
+vif(mdl_hd_emp_rr)
+```
+
+
+2. Vigor/peak velocity results
+
+```{r emp_rr_pv, echo=FALSE}
+mdl_pv_emp_rr <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + emp_rate +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+```
+
+3. PV model with Env stuff
+
+```{r pv_emp_rr2, echo=FALSE}
+
+mdl_pv_emp_rr2 <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + emp_rate*Order +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_pv_emp_rr2, type="diag")
+summary(mdl_pv_emp_rr2)
+plot_model(mdl_pv_emp_rr2, type="pred")
+plot_model(mdl_pv_emp_rr2, type="int")
+vif(mdl_pv_emp_rr2)
+
+```
+
+
+How does reward rate differ between the different computation?
+Performance-dependent and independent
+
+## visualzing the reward rate 
+
+```{r RR_pv, echo=FALSE}
+
+ggplot(data=df.matlab)+geom_point(aes(x=trial_bin_ord_c, y=pk_vel_out,color=rate_update_new))+
+  facet_wrap(ord_labels~Subj_id, nrow=2,scales="free")+
+  theme_classic()
+
+ggplot(data=df.matlab)+geom_point(aes(x=rate_update_new, y=pk_vel_out,color=rate_update_new))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+
+ggplot(data=df.matlab)+geom_line(aes(x=trial_bin_ord_c, y=rate_update_new, color=rate_update_new))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+ggplot(data=df.matlab)+geom_line(aes(x=rate_update_new, y= pv_norm, color=rate_update_new))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+```
+
+## Do those who earned more reward in each environment have higher peak velocity?
+
+```{r reward_pv, echo=FALSE}
+create_agg <- function(df, form, varlist) {
+
+  df.agg = aggregate(formula = form,data=df,FUN= mean)
+  cnames = colnames(df.agg)
+  df.agg_sd = aggregate(formula = form,data= df, FUN=sd)
+  
+  varlist = varlist
+  
+  # varlist
+  for (i in 1:length(varlist)) {
+    v= varlist[i]
+    max_varname = paste(v,'_max', sep="")
+    min_varname = paste(v,'_min', sep="")
+    # print(min_varname)
+    df.agg = cbind.data.frame(df.agg, df.agg[v] - df.agg_sd[v], df.agg[v] + df.agg_sd[v])
+    cnames = c(cnames, min_varname, max_varname)
+    
+  }
+  
+  colnames(df.agg) <- cnames
+  return(df.agg)
+}
+
+```
+
+
+
+## optimize rate of update for reward rate per subject by minimizing adjusted R^2 
+
+```{r opt_fun, echo=FALSE}
+# rate_upd_col <- function(alpha)
+
+lm_subj <- function( alpha, subj_id) {
+  df.subj = data[data$Subj_id == s,]
+  df.subj$rate_update <- numeric(nrow(df.subj))
+  for( e in 0:1 ){
+    
+    if (e==1){
+      df.subj$rate_update[df.subj$Trial==1 &  df.subj$ord_env ==e ] = df.subj$rate_update[df.subj$Trial==max(df.subj$Trial[df.subj$ord_env ==e-1]) & df.subj$ord_env ==e-1 ]
+    }
+    
+    for (tr in 2:max(df.subj$Trial[ df.subj$ord_env ==e])){
+
+      df.subj$rate_update[df.subj$Trial==tr & df.subj$ord_env ==e ] = df.subj$rate_update[df.subj$Trial==tr-1 & df.subj$ord_env ==e ] + alpha * (df.subj$reward[df.subj$Trial==tr  & df.subj$ord_env ==e ] - df.subj$rate_update[df.subj$Trial==tr-1 & df.subj$ord_env ==e ])
+      
+    }
+  }
+  
+  mdl.subj <- lm(formula= log(pk_vel_out)~  rate_update, data=df.subj, na.action=na.exclude)
+  r_sqd_adj <- summary(mdl.subj)$r.squared
+  
+  print(paste("Alpha = ", alpha,"R-sqd = ", r_sqd_adj))
+  
+  return(r_sqd_adj)
+  
+}
+
+
+# test the function 
+subjs = unique(data$Subj_id)
+s = subjs[1]
+  # df.subj = data[data$Subj_id == s,]
+
+print(lm_subj(0.09,0))
+
+
+
+```
+
+## Run optimizer
+
+```{r run_opt, echo=FALSE}
+
+library(pracma)
+
+for (s in subjs){
+  print(s)
+  
+  alpha_opt <- fminsearch(fn=lm_subj, x0=c(0.05,0), subj_id=s,minimize=FALSE)
+  
+  # print(lm_subj(alpha_opt))
+}
+```
+

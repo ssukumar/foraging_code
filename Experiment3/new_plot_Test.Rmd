@@ -1,0 +1,396 @@
+---
+title: "new_plot_test"
+author: "Shruthi Sukumar"
+date: "4/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library('ggplot2')
+require('reshape2')
+require(lmerTest)
+library('lme4')
+library(sjPlot)
+library(car)
+require(multcomp)
+
+```
+
+## ANOVA results for vigor
+
+First, we test if there is an effect of immediate mass change on the vigor of the movement.
+
+
+```{r data_prep}
+st.err <- function(x) {
+  sd(x)/sqrt(length(x))
+}
+
+data = read.csv(file='../table_R.csv')
+data$Probe <- as.factor(data$Probe)
+data$Subj_id <- as.factor(data$Subj_id)
+data$Order <- as.factor(data$Order)
+
+data$harvest_scale = data$harvest_duration/1000
+data$pr_scale = data$patch_residence_duration/1000
+data$travel_scale = data$travel_duration/1000
+data$movement_scale = data$movement_duration/1000
+# determine difference in peak velocity between environments (Low minus High effort)
+# Verified that this operation is the same as doing difference by subjects
+data$pv_diff = data$pk_vel[data$Env ==0] - data$pk_vel[data$Env==1]
+data$hs_diff = data$harvest_scale[data$Env == 1] - data$harvest_scale[data$Env==0]
+data$td_diff = data$travel_duration[data$Env==0] - data$travel_duration[data$Env==1]
+data$ts_diff = data$travel_scale[data$Env==0] - data$travel_scale[data$Env==1]
+data$md_diff = data$movement_duration[data$Env==0] - data$movement_duration[data$Env==1]
+
+data$block_no = numeric(nrow(data))
+data$probe_blockno = numeric(nrow(data))
+data$grip_reqd = numeric(nrow(data))
+data$tot_harvest_1010 = numeric(nrow(data))
+
+subj_arr = unique(data$Subj_id)
+
+# create block number variable to label every consecutive block of 50trials 
+# Also impute missing values to avoid issues while running ANOVA
+
+for (s in subj_arr) {
+  
+  data$tot_harvest_1010[data$Subj_id==s] = data$grip_ramp_up_dur[data$Subj_id==s] + data$harvest_duration[data$Subj_id==s] + data$grip_drop_time[data$Subj_id == s] + data$grip_release_time[data$Subj_id==s]
+  
+  for (e in 0:1){
+
+    hrt_vec = data$harvest_reaction_time[data$Subj_id==s & data$Env==e]
+    frm_vec = data$force_rate_max[data$Subj_id==s & data$Env==e]
+    gru_vec = data$grip_ramp_up_dur[data$Subj_id==s & data$Env==e]
+    gut_vec = data$gut_norm[data$Subj_id==s & data$Env==e]
+    thd_vec = data$tot_harvest_1010[data$Subj_id==s & data$Env == e]
+
+    hrt_avg = mean(hrt_vec,na.rm=TRUE)
+    frm_avg = mean(frm_vec,na.rm=TRUE)
+    gru_avg = mean(gru_vec,na.rm=TRUE)
+    gut_avg = mean(gut_vec, na.rm=TRUE)
+    thd_avg = mean(thd_vec, na.rm=TRUE)
+
+    nan_idx_hrt = is.nan(data$harvest_reaction_time[data$Subj_id==s & data$Env==e])
+    nan_idx_frm = is.nan(data$force_rate_max[data$Subj_id==s & data$Env==e])
+    nan_idx_gru = is.nan(data$grip_ramp_up_dur[data$Subj_id==s & data$Env==e])
+    nan_idx_gut = is.nan(data$gut_norm[data$Subj_id==s & data$Env==e])
+    nan_idx_thd = is.nan(data$thd_norm[data$Subj_id==s & data$Env==e])
+
+    hrt_vec[nan_idx_hrt] = hrt_avg
+    frm_vec[nan_idx_frm] = frm_avg
+    gru_vec[nan_idx_gru] = gru_avg
+    gut_vec[nan_idx_gru] = gut_avg
+    thd_vec[nan_idx_thd] = thd_avg
+
+    data$harvest_reaction_time[data$Subj_id==s & data$Env==e] = hrt_vec
+    data$force_rate_max[data$Subj_id==s & data$Env==e] = frm_vec
+    data$grip_ramp_up_dur[data$Subj_id==s & data$Env==e] = gru_vec
+    data$gut_norm[data$Subj_id==s & data$Env==e] = gut_vec
+    data$tot_harvest_1010[data$Subj_id==s & data$Env==e] = thd_vec
+    
+    block_no  = data$block_no[data$Subj_id==s & data$Env==e]
+    block_no[1:50] = 0
+    block_no[51:100] = 1
+    block_no[101:150] = 2
+    block_no[151:200] = 3
+    data$block_no[data$Subj_id==s & data$Env==e] = block_no
+    data$probe_trialno[data$Probe==1 & data$Subj_id==s & data$Env == e] = seq(1,40,1)
+    
+    
+  }
+  
+  # create the diff variables to determine 
+  data$hs_diff[data$Subj_id ==s] = data$harvest_scale[data$Env==0 & data$Subj_id==s]-
+    data$harvest_scale[data$Env==1& data$Subj_id==s]
+  data$ps_diff[data$Subj_id ==s] = data$pr_scale[data$Env==0 & data$Subj_id==s]-
+    data$pr_scale[data$Env==1& data$Subj_id==s]
+  data$pk_norm_avg[data$Subj_id==s] =
+    data$pk_vel[data$Subj_id==s]/mean(data$pk_vel[data$Subj_id==s],na.rm=TRUE) 
+  data$travel_norm_avg[data$Subj_id==s] = data$travel_scale[data$Subj_id==s]/
+    mean(data$travel_scale[data$Subj_id==s],na.rm=TRUE) 
+  data$pk_norm_avg[data$Subj_id==s] = data$pk_vel[data$Subj_id==s]/ mean(data$pk_vel[data$Subj_id==s], na.rm=TRUE) 
+  data$travel_norm_avg[data$Subj_id==s] = data$travel_scale[data$Subj_id==s]/mean(data$travel_scale[data$Subj_id==s], na.rm=TRUE)
+  data$frm_norm_avg[data$Subj_id==s] = data$force_rate_max[data$Subj_id==s]/ mean(data$force_rate_max[data$Subj_id==s],na.rm=TRUE) 
+  data$gru_norm_avg[data$Subj_id==s] = data$grip_ramp_up_dur[data$Subj_id==s]/
+    mean(data$grip_ramp_up_dur[data$Subj_id==s],na.tm=TRUE)
+  
+  
+}
+
+data$mass[data$Env==0] = 0
+data$mass[data$Env==1] = 3.5
+data$mass[data$Probe==1]=2
+
+data$trial_scale = data$Trial/200
+data$Order = as.factor(data$Order)
+data$berry_per_har = data$berries/data$tot_harvest_1010
+data$probe_block_order = numeric(nrow(data))
+
+for ( o in 0:1){
+  data$probe_block_order[data$Order == 0] = (as.numeric(as.character(data$Env[data$Order == 0] )))*4 + data$block_no[data$Order == 0]
+  data$probe_block_order[data$Order == 1] = (as.numeric(as.character(data$Order[data$Order == 1])) - as.numeric(as.character(data$Env[data$Order == 1] )) )*4 + data$block_no[data$Order == 1]
+  
+}
+
+```
+
+## Create a new column for trial in block (1-50)
+
+```{r col_create, echo= FALSE}
+data$trial_in_block = numeric(nrow(data))
+
+bl_no = unique(data$block_no)
+
+for (s in subj_arr) {
+  
+  for (e in 0:1){
+
+    for (b in bl_no) {
+      
+      stopifnot(length(data$trial_in_block[data$Subj_id==s & data$Env == e & data$block_no==b ]) == 50)
+      
+      data$trial_in_block[data$Subj_id==s & data$Env == e & data$block_no==b ] = seq(1,50,1)
+    }
+    
+  }
+  
+}
+    
+# How to test for this 
+print(data$trial_in_block)
+
+```
+
+
+## Average across blocks for each subjects
+
+errorbars are SEM for the blocks. 
+
+```{r agg_across_blocks,echo=FALSE}
+# looking at what happens when you average across blocks for each subject. 
+
+# first create the data_set 
+
+data$pk_vel[data$Trial==1] <- NA
+
+agg_subj = aggregate(data=data, pk_vel ~ Env + trial_in_block +Probe +Subj_id , mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=data, pk_vel ~ Env + trial_in_block +Probe +Subj_id , st.err )
+varlist = c('pk_vel')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+## are there any tests needed 
+
+print(colnames(agg_subj))
+
+ggplot(data=agg_subj)+geom_line(aes(x= trial_in_block, y= pk_vel, color=factor(Env) ), width=1.5)+
+  geom_errorbar(aes(x=trial_in_block, ymin = pk_vel_min, ymax= pk_vel_max, color =factor(Env) ), width=0)+ 
+  facet_wrap(~Subj_id, scales="free")+
+  theme_classic()
+
+
+```
+
+## Aggregating across all subjects
+
+Now we will take the mean of means and the standard error of the mean across subjects ( variability within subject across blocks will be lost)
+
+
+```{r agg_all_subjs, echo=FALSE}
+
+agg_all = aggregate(data=agg_subj, pk_vel ~ Env + trial_in_block +Probe  , mean )
+cnames = colnames(agg_all)
+agg_sd_all = aggregate(data=agg_subj, pk_vel ~ Env + trial_in_block +Probe  , st.err )
+varlist = c('pk_vel')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_all = cbind.data.frame(agg_all, agg_all[v] - agg_sd_all[v], agg_all[v] + agg_sd_all[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_all) <- cnames
+
+## are there any tests needed 
+
+print(colnames(agg_all))
+
+ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y= pk_vel, color=factor(Env) ), width=1.5)+
+  geom_errorbar(aes(x=trial_in_block, ymin = pk_vel_min, ymax= pk_vel_max, color =factor(Env) ), width=0)+
+  annotate("rect", xmin = 21, xmax = 30, ymin = 0.5, ymax = 0.8,alpha = .1,fill = "blue")+
+  theme_classic()
+
+```
+
+
+
+
+## Average across blocks for each subjects (Normalized peak velocity )
+
+errorbars are SEM for the blocks. 
+
+```{r agg_across_blocks,echo=FALSE}
+# looking at what happens when you average across blocks for each subject. 
+
+# first create the data_set 
+
+agg_subj = aggregate(data=data, cbind( pv_diff, pk_norm_avg) ~ Env + trial_in_block +Probe +Subj_id , mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=data, cbind( pv_diff, pk_norm_avg) ~ Env + trial_in_block +Probe +Subj_id , st.err )
+varlist = c('pv_diff','pk_norm_avg')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+## are there any tests needed 
+
+print(colnames(agg_subj))
+
+ggplot(data=agg_subj)+geom_line(aes(x= trial_in_block, y= pk_norm_avg, color=factor(Env) ), width=1.5)+
+  geom_errorbar(aes(x=trial_in_block, ymin = pk_norm_avg_min, ymax= pk_norm_avg_max, color =factor(Env) ), width=0)+ 
+  facet_wrap(~Subj_id, scales="free")+
+  theme_classic()
+
+
+```
+
+
+## Aggregating across all subjects (Normalized peak velocity )
+
+Now we will take the mean of means and the standard error of the mean across subjects ( variability within subject across blocks will be lost)
+
+
+```{r agg_all_subjs, echo=FALSE}
+
+agg_all = aggregate(data=agg_subj, cbind( pv_diff, pk_norm_avg) ~ Env + trial_in_block +Probe  , mean )
+cnames = colnames(agg_all)
+agg_sd_all = aggregate(data=agg_subj, cbind( pv_diff, pk_norm_avg) ~ Env + trial_in_block +Probe  , st.err )
+varlist = c('pv_diff', 'pk_norm_avg')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_all = cbind.data.frame(agg_all, agg_all[v] - agg_sd_all[v], agg_all[v] + agg_sd_all[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_all) <- cnames
+
+## are there any tests needed 
+
+print(colnames(agg_all))
+
+th <- theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+p_block <- ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y= pk_norm_avg, color=factor(Env) ), width=1.5)+
+  geom_errorbar(aes(x=trial_in_block, ymin = pk_norm_avg_min, ymax= pk_norm_avg_max, color =factor(Env) ), width=0)+
+  annotate("rect", xmin = 21, xmax = 30, ymin = 1.25, ymax = 0.78,alpha = .1,fill = "blue")+
+  th
+
+p_block 
+
+fn = file.path('..','plots','pv_norm_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_block , device="pdf", width=8, height =6 )
+
+
+```
+
+
+```{r }
+
+agg_all = agg_all[agg_all$Env==0,]
+p_diff <- ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y=pv_diff ))+
+  geom_errorbar(aes(x=trial_in_block, ymin = pv_diff_min, ymax= pv_diff_max, width=0 ))+
+  geom_hline(yintercept=0, linetype = 'dashed')+
+  annotate("rect", xmin = 21, xmax = 30, ymin = -.05, ymax = 0.1,alpha = .1,fill = "blue")+
+  xlab('Trial in block')+ylab(expression(Delta~Peak~Velocity))+
+  th
+
+p_diff
+
+fn = file.path('..','plots','pv_diff_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_diff , device="pdf", width=8, height =6 )
+
+```
+## Blockwise stats as required by Alaa and Reza
+
+We are going to do a 1 way repeated measures ANOVA on the environment trials per subject
+
+```{r}
+agg_aov = aggregate(data= data, cbind(pk_vel, force_rate_max)~ trial_in_block + Env + Probe + Subj_id, mean )
+
+# agg_aov$trial_in_block = as.factor(agg_aov$trial_in_block)
+
+agg_aov_env = agg_aov[agg_aov$Probe == 0,]
+
+fig3.aov <- with(data = agg_aov_env, aov(pk_vel~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+
+```
+
+Looking at the one-way anova for probe trials alone
+
+```{r}
+
+agg_aov_prb = agg_aov[agg_aov$Probe == 1,]
+
+fig3.aov <- with(data = agg_aov_prb, aov(pk_vel~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+
+```
+
+## Force rate stats
+
+```{r}
+fig3.aov <- with(data = agg_aov_env, aov(force_rate_max~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+```
+
+```{r}
+fig3.aov <- with(data = agg_aov_prb, aov(force_rate_max~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+```
+

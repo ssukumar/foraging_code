@@ -1,0 +1,845 @@
+---
+title: "reward_rate_analysis"
+author: "Shruthi Sukumar"
+date: "4/18/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library('ggplot2')
+require('reshape2')
+require(lmerTest)
+library('lme4')
+library(sjPlot)
+library('pwr')
+library('dplyr')
+library('car')
+library('reshape2')
+library('gridExtra')
+```
+
+<!-- Read in data -->
+
+```{r dat_gen, echo=FALSE}
+
+st.err <- function(x) {
+  sd(x)/sqrt(length(x))
+}
+
+data = read.csv(file='../foraging_reward_new.csv')
+data$Subj_id=as.factor(data$Subj_id)
+
+
+data$travel_scale = data$travel_duration/1000
+data$hd_scale = data$harvest_duration/1000
+data$movement_scale = data$movement_duration/1000
+
+data$travel_scale[is.nan(data$travel_duration)] <-0
+data$hd_scale[is.nan(data$harvest_duration)] <-0 
+data$movement_scale[is.nan(data$movement_duration)] <-0 
+
+data = data[data$Subj_id !=0,]
+subj_arr = unique(data$Subj_id)
+data$reward = data$alpha_vals #non-factor
+data$alpha_vals= as.factor(data$alpha_vals)
+
+for (s in subj_arr) {
+  
+  pv_avg = mean(data$pk_vel[data$Subj_id==s], na.rm=TRUE)
+  hd_avg = mean(data$harvest_duration[data$Subj_id==s], na.rm=TRUE)
+  for (e in 0:1){
+    
+    pv = data$pk_vel[data$Subj_id==s & data$Env==e]
+    pv_out = append(pv[c(2:length(pv))], NA_real_)
+    data$pk_vel_out[data$Subj_id==s & data$Env==e] <- pv_out
+    data$pv_norm[data$Subj_id==s & data$Env==e] = data$pk_vel[data$Subj_id==s & data$Env==e]/pv_avg
+    data$hd_norm[data$Subj_id==s & data$Env==e] = data$harvest_duration[data$Subj_id==s & data$Env==e]/hd_avg
+
+  }
+  
+}
+
+data_tmp <- data %>% group_by(Subj_id, Env) %>% mutate(trial_scale = Trial/max(Trial,na.rm=TRUE), trial_bin = as.factor(round(Trial/max(Trial,na.rm=TRUE), 1)), ord_env = if_else(Order==1, 1 - as.double(Env) , as.double(Env)), trial_bin_ord = if_else( Order!=Env,1.1+round(Trial/max(Trial,na.rm=TRUE), 1),round(Trial/max(Trial,na.rm=TRUE), 1) ),  trial_bin_ord_c = if_else( Order!=Env,1+round(Trial/max(Trial,na.rm=TRUE), 3),round(Trial/max(Trial,na.rm=TRUE), 3)))
+data_tmp$trial_bin_ord = as.factor(data_tmp$trial_bin_ord)
+data <- data_tmp
+
+
+# data_tmp <- data %>% group_by(Subj_id) %>% mutate(trial_bin_ord = as.factor( if_else(ord_env==1, as.numeric(trial_bin)*2, as.numeric(trial_bin))))
+# data <- data_tmp
+# Trial scale binned 
+
+data$Env <- as.factor(data$Env)
+data$Subj_id <- as.factor(data$Subj_id)
+data$Order <- as.factor(data$Order)
+data$ord_labels <-character(nrow(data))
+data$ord_labels[data$Order==0] <- "Low Rewd First"
+data$ord_labels[data$Order==1] <- "High Rewd First"
+data$trial_env_ord = data$trial_scale + data$ord_env
+data$berries[is.nan(data$berries)] <-0
+data_tmp <- data %>% group_by(Subj_id,Env) %>% mutate(cumul_berries = cumsum(berries) )
+data <-data_tmp
+data$cumul_berries_scale = data$cumul_berries/10000
+# data$travel_scale[is.nan(data$travel_scale)] =0
+# data$travel_scale[is.nan(data$travel_scale)] =0
+
+data_tmp <- data %>% group_by(Subj_id, Env) %>% mutate(cumul_rate= cumul_berries/(cumsum(hd_scale)+cumsum(travel_scale) ))
+data <-data_tmp
+data_tmp <- data %>% group_by(Subj_id) %>% arrange(trial_bin_ord_c, by_group=TRUE) %>% mutate(emp_rate = cumsum(berries)/ (cumsum(hd_scale) + cumsum(movement_scale) )) 
+data <- data_tmp
+
+
+data$travel_scale[is.nan(data$travel_duration)] <- NA
+data$hd_scale[is.nan(data$harvest_duration)] <-NA 
+data$movement_scale[is.nan(data$movement_duration)] <-NA 
+## Set ggplot theme
+data_mid = data[data$mid_15_trial==1,]
+
+
+th <- theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        #legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+df.matlab = read.csv(file='df_from_matlab.csv')
+# df.matlab1 = read.csv(file='df_from_matlab1.csv')
+# 
+# df.matlab = merge(df.matlab, df.matlab1, by = intersect(names(df.matlab), names(df.matlab1)))
+
+create_agg <- function(df, form, varlist) {
+
+  df.agg = aggregate(formula = form,data=df,FUN= mean)
+  cnames = colnames(df.agg)
+  df.agg_sd = aggregate(formula = form,data= df, FUN=sd)
+  
+  varlist = varlist
+  
+  # varlist
+  for (i in 1:length(varlist)) {
+    v= varlist[i]
+    max_varname = paste(v,'_max', sep="")
+    min_varname = paste(v,'_min', sep="")
+    # print(min_varname)
+    df.agg = cbind.data.frame(df.agg, df.agg[v] - df.agg_sd[v], df.agg[v] + df.agg_sd[v])
+    cnames = c(cnames, min_varname, max_varname)
+    
+  }
+  
+  colnames(df.agg) <- cnames
+  return(df.agg)
+}
+
+# write.csv(df.matlab, "df_from_R.csv")
+
+```
+
+
+## Reward rate computations 
+
+1. Empirical reward rate by environmemnt
+
+$$ RR = \frac{ {\Sigma^t_{\tau=1}} r_\tau}{\Sigma^t_{\tau=1}{t_h}_\tau + {t_m}_\tau }$$
+
+
+```{r emp_rate_viz, echo=FALSE}
+
+ggplot(data=data)+geom_line(aes(x = trial_bin_ord_c, y=emp_rate))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+ggplot(data=data)+geom_line(aes(x = trial_bin_ord_c, y=pk_vel_out,color=emp_rate))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+ggplot(data=data)+geom_line(aes(x = emp_rate, y=pk_vel_out,color=emp_rate))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+```
+
+## Sanity check to see if empirical rate is computed correctly 
+
+```{r emp_rate_comp, echo=FALSE}
+
+data$cumul_rwd = numeric(nrow(data))
+data$cumul_time = numeric(nrow(data))
+data$rate_update_opt = numeric(nrow(data))
+alpha = 0.036
+for (s in subj_arr){
+  df_subj = data[data$Subj_id==s,]
+  # df_subj = df_subj[order(trial_bin_ord_c)]
+  nr=0
+  dr=0
+  tr =1
+  rate_prev = 0
+  for (t in sort(df_subj$trial_bin_ord_c)){
+    nr = nr +data$reward[data$Subj_id==s & data$trial_bin_ord_c==t] 
+    data$cumul_rwd[data$Subj_id==s & data$trial_bin_ord_c==t] = nr
+    # if (!is.na(data$hd_scale[data$Subj_id==s & data$trial_bin_ord_c==t]) && !is.na(data$movement_scale[data$Subj_id==s & data$trial_bin_ord_c==t])){
+    #   dr = dr + data$hd_scale[data$Subj_id==s & data$trial_bin_ord_c==t] + data$movement_scale[data$Subj_id==s & data$trial_bin_ord_c==t]
+    # }
+     dr = dr +1
+    data$cumul_time[data$Subj_id==s & data$trial_bin_ord_c==t] = dr 
+    data$rate_update_opt[data$Subj_id==s & data$trial_bin_ord_c==t] = rate_prev + alpha*(data$reward[data$Subj_id==s & data$trial_bin_ord_c==t] - rate_prev)
+    rate_prev = data$rate_update_opt[data$Subj_id==s & data$trial_bin_ord_c==t]
+  }
+  
+} 
+
+data$emp_rate_chk = data$cumul_rwd/data$cumul_time
+ggplot(data=data)+geom_line(aes(x = trial_bin_ord_c, y=emp_rate_chk))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+ggplot(data=data)+geom_line(aes(x = trial_bin_ord_c, y=emp_rate))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+```
+
+plots for exemplar subjects
+
+```{r}
+
+data_subj_ex = data[data$Subj_id==713,]
+
+plt_rr_713 <- ggplot(data=data_subj_ex) + geom_line(aes(x=trial_bin_ord_c, y= rate_update_opt), size=1.5)+
+  facet_wrap(~Subj_id, nrow=1, scales="free")+
+  ylab('Reward Rate')+xlab('Time')+
+  theme_classic()
+
+ggsave('plt_rr_713.pdf',plt_rr_713, width=4, height=3)
+
+data_subj_ex = data[data$Subj_id==594,]
+
+plt_rr_594 <- ggplot(data=data_subj_ex) + geom_line(aes(x=trial_bin_ord_c, y= rate_update_opt), size=1.5)+
+  facet_wrap(~Subj_id, nrow=1, scales="free")+
+  ylab('Reward Rate')+xlab('Time')+
+  theme_classic()
+ggsave('plt_rr_594.pdf',plt_rr_594, width=4, height=3)
+
+
+```
+
+
+## Superimposing all reward rates
+
+```{r overlay_df, echo=FALSE}
+
+data_merge = merge(data,df.matlab, by=intersect(names(data),names(df.matlab) ))
+
+df_overlay = data_merge %>% select(Subj_id, Env, ord_labels, trial_bin_ord_c, emp_rate, cumul_rate_beta, emp_rate_chk, rate_update_opt)
+
+df_overlay.melt = melt(df_overlay, id = c('Env','Subj_id','ord_labels','trial_bin_ord_c'))
+
+rr_comp <- ggplot(data=df_overlay.melt)+geom_line(aes(x=trial_bin_ord_c, y= value, color=variable),size=1.0)+
+  facet_wrap(ord_labels~Subj_id, nrow = 2, scales="free")+
+  theme_classic()+
+  scale_colour_discrete(name='Reward Rate Metric', breaks = c('emp_rate','cumul_rate_beta', 'emp_rate_chk', 'rate_update_opt'),
+                       labels = c('Empirical RR', 'ERR with forgetting', 'Avg. RR', 'Detla-Rule RR'))+
+  #theme(legend.position = "none")+ 
+  xlab('Time in Experiment')
+rr_comp
+
+ggsave('../plots/rr_comp.png', rr_comp, width =6 , height = 3, units = "in")
+
+```
+
+- which free parameter is better (delta rule or leaky integrator)
+
+- leaky integrator + experience-based
+
+- experience - just another way to replicate the design 
+
+- Build a generative model of performance in the two environments 
+
+
+## Superimposing performance-based DF
+
+```{r overlay_df2, echo=FALSE}
+
+# data_merge = merge(data,df.matlab, by=intersect(names(data),names(df.matlab) ))
+
+df_overlay2 = data_merge %>% select(Subj_id, Env, ord_labels, trial_bin_ord_c, emp_rate, cumul_rate_beta)
+
+df_overlay2.melt = melt(df_overlay2, id = c('Env','Subj_id','ord_labels','trial_bin_ord_c'))
+
+ggplot(data=df_overlay2.melt)+geom_line(aes(x=trial_bin_ord_c, y= value, color=variable))+
+  facet_wrap(ord_labels~Subj_id, nrow = 2, scales="free")+
+  theme_classic()
+
+```
+
+
+## Superimposing experience-based DF 
+
+```{r overlay_df3, echo=FALSE}
+
+
+df_overlay3 = data_merge %>% select(Subj_id, Env, ord_labels, trial_bin_ord_c, emp_rate_chk, rate_update_opt)
+
+df_overlay3.melt = melt(df_overlay3, id = c('Env','Subj_id','ord_labels','trial_bin_ord_c'))
+
+ggplot(data=df_overlay3.melt)+geom_line(aes(x=trial_bin_ord_c, y= value, color=variable))+
+  facet_wrap(ord_labels~Subj_id, nrow = 2, scales="free")+
+  theme_classic()
+
+```
+
+
+## Statistical Results for all the tests 
+
+1. Experience-based reward rates 
+
+a. Avg. reward over the past trials (no free parameters)
+$$ RR = \frac{ {\Sigma^t_{\tau=1}} r_\tau}{\Sigma^t_{\tau=1}\tau }$$
+
+```{r emp_rr_hd1a, echo=FALSE}
+
+mdl_hd_emp_rr = lmer(data=data, log10(hd_scale) ~ emp_rate_chk*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_emp_rr, type="diag")
+summary(mdl_hd_emp_rr)
+plot_model(mdl_hd_emp_rr, type="int")
+plot_model(mdl_hd_emp_rr, type="pred")
+
+vif(mdl_hd_emp_rr)
+```
+
+
+
+```{r emp_rr_pv1a, echo=FALSE}
+mdl_pv_emp_rr <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + emp_rate_chk +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+```
+
+b. Error-based learning (only patch reward indicator used )
+
+This has been written about in the document
+```{r emp_rr_pv1b, echo=FALSE}
+mdl_pv_emp_rr <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + rate_update_opt +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+```
+
+
+Harvest duration is what it's fit based on to minimize AIC
+```{r emp_rr_hd1b, echo=FALSE}
+
+mdl_hd_emp_rr = lmer(data=data, log10(hd_scale) ~ rate_update_opt*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_emp_rr, type="diag")
+summary(mdl_hd_emp_rr)
+plot_model(mdl_hd_emp_rr, type="int")
+plot_model(mdl_hd_emp_rr, type="pred")
+
+vif(mdl_hd_emp_rr)
+```
+
+
+2. Empirical reward rate 
+
+a. Full history - no forgetting
+
+$$ RR = \frac{ {\Sigma^t_{\tau=1}} r_\tau}{\Sigma^t_{\tau=1}{t_h}_\tau + {t_m}_\tau }$$
+
+ Harvest Duration results 
+```{r emp_rr_hd2a, echo=FALSE}
+
+mdl_hd_emp_rr = lmer(data=data, log10(hd_scale) ~ emp_rate*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_emp_rr, type="diag")
+summary(mdl_hd_emp_rr)
+plot_model(mdl_hd_emp_rr, type="int")
+plot_model(mdl_hd_emp_rr, type="pred")
+
+vif(mdl_hd_emp_rr)
+```
+
+```{r emp_rr_pv2a, echo=FALSE}
+library(optimx)
+mdl_pv_emp_rr <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*Order + emp_rate +(1 + emp_rate|Subj_id)  , REML = FALSE, control = lmerControl(optimizer ='optimx', optCtrl=list(method='L-BFGS-B')))
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+```
+
+
+b. Cumulative reward based on beta (forgetting)
+
+
+$$ RR = \frac{ {\Sigma^t_{\tau=1}} r_\tau * e^{-\beta \tau} }{\Sigma^t_{\tau=1}({t_h}_\tau + {t_m}_\tau) *  e^{-\beta \tau} }$$
+
+
+ Harvest Duration results 
+```{r emp_rr_hd2b, echo=FALSE}
+
+mdl_hd_emp_rr = lmer(data=data_merge, log10(hd_scale) ~ cumul_rate_beta*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE)
+plot_model(mdl_hd_emp_rr, type="diag")
+summary(mdl_hd_emp_rr)
+plot_model(mdl_hd_emp_rr, type="int")
+plot_model(mdl_hd_emp_rr, type="pred")
+
+vif(mdl_hd_emp_rr)
+```
+
+```{r emp_rr_pv2b, echo=FALSE}
+mdl_pv_emp_rr <- lmer(data=data_merge, log(pk_vel_out)~ trial_bin_ord_c*Order + cumul_rate_beta +(1|Subj_id)  , REML = FALSE)
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+```
+
+
+<!-- c. Error-based reward (but based on actual harvest and duration) -->
+
+<!--  Harvest Duration results  -->
+<!-- ```{r emp_rr_hd2c, echo=FALSE} -->
+
+<!-- mdl_hd_emp_rr = lmer(data=data_merge, log10(hd_scale) ~ rate_update_perf*reward+ trial_bin_ord_c*Order + (1|Subj_id) , REML=FALSE) -->
+<!-- plot_model(mdl_hd_emp_rr, type="diag") -->
+<!-- summary(mdl_hd_emp_rr) -->
+<!-- plot_model(mdl_hd_emp_rr, type="int") -->
+<!-- plot_model(mdl_hd_emp_rr, type="pred") -->
+
+<!-- vif(mdl_hd_emp_rr) -->
+<!-- ``` -->
+
+<!-- ```{r emp_rr_pv2c, echo=FALSE} -->
+<!-- mdl_pv_emp_rr <- lmer(data=data_merge, log(pk_vel_out)~ trial_bin_ord_c*Order + rate_update_perf +(1|Subj_id)  , REML = FALSE) -->
+<!-- plot_model(mdl_pv_emp_rr, type="diag") -->
+<!-- summary(mdl_pv_emp_rr) -->
+<!-- plot_model(mdl_pv_emp_rr, type="pred") -->
+<!-- plot_model(mdl_pv_emp_rr, type="int") -->
+<!-- vif(mdl_pv_emp_rr) -->
+
+<!-- ``` -->
+
+
+## Comparing different reward rate metrics 
+
+First we look at the difference between the experience-based and performance-based empirical reward rates
+
+```{r rr_diff1, echo=FALSE}
+
+df_overlay$emp_rate_diff = df_overlay$emp_rate_chk - df_overlay$emp_rate # to keep positive
+
+df_overlay_diff = df_overlay %>% select('Subj_id','trial_bin_ord_c','Env','ord_labels',
+                                        'emp_rate', 'emp_rate_chk','emp_rate_diff')
+df_overlay_diff.melt = melt(df_overlay_diff, id =c('Env','Subj_id','ord_labels','trial_bin_ord_c'))
+
+ggplot(data=df_overlay_diff.melt) + geom_line(aes(x=trial_bin_ord_c , y=value, color=variable))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+ggplot(data=data)+geom_point(aes(x=trial_bin_ord_c,y=pk_vel, color= emp_rate))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+```
+
+Average the reward rate within an environment and see
+
+```{r rr_env_comp, echo=FALSE}
+
+df_env_rr <- create_agg(df= data_merge, form = formula(cbind(pk_vel,emp_rate, emp_rate_chk,cumul_rate_beta, rate_update_opt) ~ Env+Subj_id+ord_labels), varlist=c('pk_vel','emp_rate','cumul_rate_beta','emp_rate_chk', 'rate_update_opt'))
+df_env_rr1 <- df_env_rr %>% select(-contains('_min') & -contains('_max'))
+df_env_rr <- df_env_rr1
+df_env_rr.melt = melt(df_env_rr, id=c('Subj_id', 'Env', 'pk_vel','ord_labels' ))
+
+
+for (v in c('emp_rate','cumul_rate_beta','emp_rate_chk', 'rate_update_opt')){
+  v_diff = paste0(v,'_diff')
+  df_env_rr[,v_diff] = numeric(nrow(df_env_rr))
+  for (s in subj_arr){
+    df_sub0 = df_env_rr[df_env_rr$Subj_id==s & df_env_rr$Env==0,]
+    df_sub1 = df_env_rr[df_env_rr$Subj_id==s & df_env_rr$Env==1,]
+    df_env_rr[,v_diff][df_env_rr$Subj_id==s] = df_sub1[,v] - df_sub0[,v] 
+  }
+  
+}
+
+rr_env_comp <- ggplot(data=df_env_rr.melt) + geom_line(aes(x=Env, y= value, color=variable, group=variable), size=1.2)+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()+
+  scale_colour_manual(values=c("#999999", "#E69F00", "#56B4E9","#248f24"), name='Reward Rate Metric', breaks = c('emp_rate','cumul_rate_beta', 'emp_rate_chk', 'rate_update_opt'),
+                       labels = c('Empirical RR', 'ERR with forgetting', 'Avg. RR', 'Detla-Rule RR'))+
+  scale_x_discrete(breaks = c(0,1), labels=c('Low','High'))+
+  xlab('Environment Reward')#+theme(legend.position="none")
+rr_env_comp
+ggsave('../plots/rr_env_comp.png', rr_env_comp, width=8, height=4, units = "in")
+
+df_env_rr1 = df_env_rr[df_env_rr$Env==1,]
+df_env_rr_tmp <- df_env_rr1 %>% select(-c('emp_rate','cumul_rate_beta','emp_rate_chk', 'rate_update_opt'))
+df_env_rr1 <- df_env_rr_tmp
+df_env_rr1.melt = melt(df_env_rr1, id=c('Subj_id', 'Env', 'pk_vel','ord_labels' ))
+
+rr_env_diff <- ggplot(data=df_env_rr1.melt) + geom_bar(aes(x=Env, y= value, fill=variable, group=variable), size=1.2,position="dodge", stat="identity")+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()+
+  scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9","#248f24"), name='Reward Rate Metric', breaks = c('emp_rate_diff','cumul_rate_beta_diff', 'emp_rate_chk_diff', 'rate_update_opt_diff'),
+                       labels = c('Empirical RR', 'ERR with forgetting', 'Avg. RR', 'Detla-Rule RR'))+
+ scale_x_discrete(breaks = c(0,1), labels=c('',''))+
+  xlab('Environment Reward')#+theme(legend.position="none")
+
+rr_env_diff
+ggsave('../plots/rr_env_diff.png', rr_env_diff, width=8, height=4, units = "in")
+
+```
+
+
+## Next we look at how reward rate metrics correlate with peak velocity using line plots
+
+
+```{r rr_pv_comp, echo=FALSE}
+
+
+df_overlay4 = data_merge %>% select('Subj_id','trial_bin_ord_c','Env','ord_labels',
+                                        'emp_rate', 'pk_vel')
+df_overlay4.melt = melt(df_overlay4, id =c('Env','Subj_id','ord_labels','trial_bin_ord_c'))
+
+ggplot(data=df_overlay4.melt) + geom_line(aes(x=trial_bin_ord_c , y=value, color=variable))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+ggplot(data=data)+geom_point(aes(x=trial_bin_ord_c,y=pk_vel, color= emp_rate))+
+  facet_wrap(ord_labels~Subj_id, nrow=2, scales="free")+
+  theme_classic()
+
+```
+
+## Detrended peak velocity according to model
+
+ 
+```{r fit_logm_part2, echo=FALSE}
+
+subjs = unique(data_merge$Subj_id)
+data_merge$log_pv_detrend = numeric(nrow(data_merge))
+
+for (s in subjs){
+  lm_time_eff = lm(data=subset(data_merge,Subj_id==s & ord_env==0), log(pk_vel) ~ trial_bin_ord_c, na.action=na.exclude)
+  data_merge$log_pv_detrend[data_merge$Subj_id==s & data_merge$ord_env==0] = log(data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==0]) - predict(lm_time_eff, na.action=na.exclude)
+  plot(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==0], y = log(data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==0]),xlab= 'Trial scale', ylab = 'Log Peak Velocity',main=paste('First half Fit; subject: ',s,' Order: ',unique(data_merge$ord_labels[data_merge$Subj_id==s]) ) )
+  lines(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==0], y =predict(lm_time_eff, na.action=na.exclude) )
+  # effect_plot(fit, pred = trial_bin_ord_c, interval = TRUE, plot.points = TRUE)
+  
+  data_merge$log_pv_detrend[data_merge$Subj_id==s & data_merge$ord_env==1] = log(data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==1]) - predict(lm_time_eff, data_merge[data_merge$Subj_id==s & data_merge$ord_env==1,], na.action=na.exclude)
+  
+  plot(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==1], y = log(data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==1]),xlab= 'Trial scale', ylab = 'Log Peak Velocity',main=paste('Second half predictions; subject: ',s,' Order: ',unique(data_merge$ord_labels[data_merge$Subj_id==s])) )
+  lines(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==1], y =predict(lm_time_eff, data_merge[data_merge$Subj_id==s & data_merge$ord_env==1,], na.action=na.exclude) )
+  # effect_plot(fit, pred = trial_bin_ord_c, interval = TRUE, plot.points = TRUE)
+} 
+
+data_merge$inv_log_pv_detrend <- exp(data_merge$log_pv_detrend)
+data_merge_tmp <- data_merge %>% group_by(Subj_id, Env) %>% mutate(inv_pv_detrend_out = lead(inv_log_pv_detrend), pv_norm_out = lead(pv_norm))
+data_merge <- data_merge_tmp
+
+```
+
+## Detrending peak velocity
+
+```{r fit_lm_part2, echo=FALSE}
+
+subjs = unique(data_merge$Subj_id)
+data_merge$pv_detrend = numeric(nrow(data_merge))
+
+for (s in subjs){
+  lm_time_eff = lm(data=subset(data_merge,Subj_id==s & ord_env==0), pk_vel ~ trial_bin_ord_c, na.action=na.exclude)
+  data_merge$pv_detrend[data_merge$Subj_id==s & data_merge$ord_env==0] = data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==0] - predict(lm_time_eff, na.action=na.exclude)
+  plot(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==0], y = data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==0],xlab= 'Trial scale', ylab = 'Peak Velocity',main=paste('First half Fit; subject: ',s,' Order: ',unique(data_merge$ord_labels[data_merge$Subj_id==s]) ) )
+  lines(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==0], y =predict(lm_time_eff, na.action=na.exclude) )
+  # effect_plot(fit, pred = trial_bin_ord_c, interval = TRUE, plot.points = TRUE)
+  
+  data_merge$pv_detrend[data_merge$Subj_id==s & data_merge$ord_env==1] = data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==1] - predict(lm_time_eff, data_merge[data_merge$Subj_id==s & data_merge$ord_env==1,], na.action=na.exclude)
+  
+  plot(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==1], y = data_merge$pk_vel[data_merge$Subj_id==s & data_merge$ord_env==1],xlab= 'Trial scale', ylab = 'Peak Velocity',main=paste('Second half predictions; subject: ',s,' Order: ',unique(data_merge$ord_labels[data_merge$Subj_id==s])) )
+  lines(x =  data_merge$trial_bin_ord_c[data_merge$Subj_id==s & data_merge$ord_env==1], y =predict(lm_time_eff, data_merge[data_merge$Subj_id==s & data_merge$ord_env==1,], na.action=na.exclude) )
+  # effect_plot(fit, pred = trial_bin_ord_c, interval = TRUE, plot.points = TRUE)
+} 
+
+data_tmp <- data_merge %>% group_by(Subj_id, Env) %>% mutate(pv_detrend_out = lead(pv_detrend))
+data_merge <- data_tmp
+
+```
+
+## plotting the different metrics as afunction of discretized reward rate metrics
+
+```{r disc_metrics, echo=FALSE}
+data_tmp <- data_merge %>% group_by(Subj_id) %>% mutate(er_norm = (emp_rate - min(emp_rate))/max(emp_rate),er_norm_disc = round( (emp_rate - min(emp_rate))/max(emp_rate-min(emp_rate)),1))
+
+data_merge <- data_tmp
+
+agg_pv_norm <- create_agg(df= data_merge, form = formula(  cbind(pv_norm_out, inv_pv_detrend_out, pv_detrend_out, hd_norm) ~ er_norm_disc+ ord_labels+Subj_id ), varlist = c( 'pv_norm_out', 'inv_pv_detrend_out','pv_detrend_out'))
+
+ ggplot()+ geom_line(data=agg_pv_norm, aes(x= er_norm_disc, y = inv_pv_detrend_out, color=ord_labels, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x=er_norm_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+
+  theme_classic()
+ 
+pv_out_detrend_er <-  ggplot()+ geom_line(data=agg_pv_norm, aes(x= er_norm_disc, y = pv_detrend_out, color=Subj_id, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x=er_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max, color=Subj_id), width=0)+
+  theme_classic()
+
+pv_norm_out_er <- ggplot()+ geom_line(data=agg_pv_norm, aes(x= er_norm_disc, y = pv_norm_out, color=Subj_id, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x=er_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=Subj_id), width=0)+
+  theme_classic()
+
+agg_pv_all <- create_agg(df= agg_pv_norm , form = formula( cbind(pv_norm_out,inv_pv_detrend_out,pv_detrend_out) ~ er_norm_disc+ ord_labels), varlist = c('pv_norm_out', 'inv_pv_detrend_out','pv_detrend_out'))
+
+ggplot()+geom_line(data=agg_pv_all, aes(x= er_norm_disc, y = inv_pv_detrend_out, color=ord_labels ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_norm_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+theme_classic()
+
+ggplot()+geom_line(data=agg_pv_all, aes(x= er_norm_disc, y = pv_detrend_out, color=ord_labels ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max, color=ord_labels), width=0)+theme_classic()
+
+ggplot()+geom_line(data=agg_pv_all, aes(x= er_norm_disc, y = pv_norm_out, color=ord_labels ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=ord_labels), width=0)+theme_classic()
+
+agg_pv_all2 <- create_agg(df= agg_pv_norm , form = formula( cbind(pv_norm_out,inv_pv_detrend_out,pv_detrend_out) ~ er_norm_disc), varlist = c('pv_norm_out', 'inv_pv_detrend_out','pv_detrend_out'))
+
+pv_emp_rate<- ggplot()+geom_line(data=agg_pv_all2, aes(x= er_norm_disc, y = pv_detrend_out ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max), width=0)+theme_classic()+
+  xlab('Reward Rate Bin')+ylab('Detrended Log Peak Velocity')
+pv_emp_rate
+
+ggsave('../plots/pv_emp_rate.pdf', pv_emp_rate, width =6 , height = 3, units = "in")
+ggsave('../plots/pv_emp_rate.png', pv_emp_rate, width =6 , height = 3, units = "in")
+
+
+pv_norm_emp_rate <-ggplot()+geom_line(data=agg_pv_all2, aes(x= er_norm_disc, y = pv_norm_out ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max), width=0)+theme_classic()+
+  xlab('Reward Rate Bin')+ylab('Normalized Peak Velocity')
+pv_norm_emp_rate
+ggsave('../plots/pv_norm_emp_rate.pdf', pv_norm_emp_rate, width =6 , height = 3, units = "in")
+ggsave('../plots/pv_norm_emp_rate.png', pv_norm_emp_rate, width =6 , height = 3, units = "in")
+
+```
+
+## Stepwise regression for the empirical rate model
+
+```{r}
+library(optimx)
+mdl_pv_emp_rr <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c+ emp_rate +(1 |Subj_id)  , REML = FALSE, control = lmerControl(optimizer ='optimx', optCtrl=list(method='L-BFGS-B')))
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+# plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+
+
+```
+## Add interaction between time and reward rate 
+
+```{r}
+mdl_pv_emp_rr <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*emp_rate +(1 |Subj_id)  , REML = FALSE, control = lmerControl(optimizer ='optimx', optCtrl=list(method='L-BFGS-B')))
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+```
+
+## random slope wrt reward rate for each subject
+
+```{r}
+mdl_pv_emp_rr <- lmer(data=data, log(pk_vel_out)~ trial_bin_ord_c*emp_rate +(1 + emp_rate|Subj_id)  , REML = FALSE, control = lmerControl(optimizer ='optimx', optCtrl=list(method='L-BFGS-B')))
+plot_model(mdl_pv_emp_rr, type="diag")
+summary(mdl_pv_emp_rr)
+plot_model(mdl_pv_emp_rr, type="pred")
+plot_model(mdl_pv_emp_rr, type="int")
+vif(mdl_pv_emp_rr)
+
+```
+
+
+## plotting the different metrics as afunction of discretized reward rate metrics
+
+```{r disc_metrics, echo=FALSE}
+data_tmp <- data_merge %>% group_by(Subj_id) %>% mutate(er_chk_norm = (emp_rate_chk - min(emp_rate_chk))/max(emp_rate_chk- min(emp_rate_chk)), er_chk_norm_disc = round( (emp_rate_chk - min(emp_rate_chk))/max(emp_rate_chk- min(emp_rate_chk)),1), cumul_beta_norm = (cumul_rate_beta - min(cumul_rate_beta))/max(cumul_rate_beta-min(cumul_rate_beta)), cumul_disc = round((cumul_rate_beta - min(cumul_rate_beta))/max(cumul_rate_beta-min(cumul_rate_beta)),1) )
+data_merge <- data_tmp
+
+agg_pv_norm <- create_agg(df= data_merge, form = formula( cbind(pv_norm_out, inv_pv_detrend_out, pv_detrend_out)~ er_chk_norm_disc+ ord_labels+Subj_id ), varlist = c('pv_norm_out', 'inv_pv_detrend_out','pv_detrend_out'))
+
+ ggplot()+ geom_line(data=agg_pv_norm, aes(x= er_chk_norm_disc, y = inv_pv_detrend_out, color=ord_labels, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x=er_chk_norm_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+
+  theme_classic()
+ 
+  ggplot()+ geom_line(data=agg_pv_norm, aes(x= er_chk_norm_disc, y = pv_detrend_out, color=ord_labels, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x=er_chk_norm_disc, ymin =pv_detrend_out_min, ymax = pv_detrend_out_max, color=ord_labels), width=0)+
+  theme_classic()
+
+ ggplot()+ geom_line(data=agg_pv_norm, aes(x= er_chk_norm_disc, y = pv_norm_out, color=ord_labels, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x=er_chk_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=ord_labels), width=0)+
+  theme_classic()
+
+ 
+agg_pv_all <- create_agg(df= agg_pv_norm , form = formula( cbind(pv_norm_out, inv_pv_detrend_out, pv_detrend_out) ~ er_chk_norm_disc+ ord_labels), varlist = c( 'pv_norm_out','inv_pv_detrend_out', 'pv_detrend_out'))
+
+ggplot()+geom_line(data=agg_pv_all, aes(x= er_chk_norm_disc, y = inv_pv_detrend_out, color=ord_labels ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_chk_norm_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+theme_classic()
+
+ ggplot()+ geom_line(data=agg_pv_all, aes(x= er_chk_norm_disc, y = pv_detrend_out, color=ord_labels), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_chk_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max, color=ord_labels), width=0)+
+  theme_classic()
+
+ ggplot()+ geom_line(data=agg_pv_all, aes(x= er_chk_norm_disc, y = pv_norm_out, color=ord_labels), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=er_chk_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=ord_labels), width=0)+
+  theme_classic()
+ 
+agg_pv_all2 <- create_agg(df= agg_pv_norm , form = formula( cbind(pv_norm_out, inv_pv_detrend_out, pv_detrend_out) ~ er_chk_norm_disc), varlist = c( 'pv_norm_out','inv_pv_detrend_out', 'pv_detrend_out'))
+
+ggplot()+geom_line(data=agg_pv_all2, aes(x= er_chk_norm_disc, y = inv_pv_detrend_out ), size=2)+
+  geom_errorbar(data=agg_pv_all2, aes(x=er_chk_norm_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max), width=0)+theme_classic()
+
+pv_det_ec_rate<- ggplot()+ geom_line(data=agg_pv_all2, aes(x= er_chk_norm_disc, y = pv_detrend_out), size=2)+
+  geom_errorbar(data=agg_pv_all2, aes(x=er_chk_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max), width=0)+
+  theme_classic()+xlab('Reward Rate')+ylab('Detrended Peak Velocity')
+pv_det_ec_rate
+
+ggsave('../plots/pv_det_ec_rate.pdf', pv_det_ec_rate, width =6 , height = 3, units = "in")
+ggsave('../plots/pv_det_ec_rate.png', pv_det_ec_rate, width =6 , height = 3, units = "in")
+
+
+pv_norm_ec_rate <- ggplot()+ geom_line(data=agg_pv_all2, aes(x= er_chk_norm_disc, y = pv_norm_out), size=2)+
+  geom_errorbar(data=agg_pv_all2, aes(x=er_chk_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max), width=0)+
+  theme_classic()+xlab('Reward Rate')+ylab('Normalized Peak Velocity')
+pv_norm_ec_rate
+
+ggsave('../plots/pv_norm_ec_rate.pdf', pv_norm_ec_rate, width =6 , height = 3, units = "in")
+ggsave('../plots/pv_norm_ec_rate.png', pv_norm_ec_rate, width =6 , height = 3, units = "in")
+
+
+```
+
+## check the cumul_rate_beta
+
+```{r}
+agg_pv_norm <- create_agg(df= data_merge, form = formula( cbind(pv_norm_out, inv_pv_detrend_out, pv_detrend_out)~ cumul_disc+ ord_labels+Subj_id ), varlist = c('pv_norm_out', 'inv_pv_detrend_out','pv_detrend_out'))
+
+ ggplot()+ geom_line(data=agg_pv_norm, aes(x= cumul_disc, y = inv_pv_detrend_out, color=ord_labels, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x= cumul_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+
+  theme_classic()
+ 
+  ggplot()+ geom_line(data=agg_pv_norm, aes(x= cumul_disc, y = pv_detrend_out, color=ord_labels, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x= cumul_disc, ymin =pv_detrend_out_min, ymax = pv_detrend_out_max, color=ord_labels), width=0)+
+  theme_classic()
+
+ ggplot()+ geom_line(data=agg_pv_norm, aes(x= cumul_disc, y = pv_norm_out, color=ord_labels, group=Subj_id))+
+  geom_errorbar(data=agg_pv_norm, aes(x= cumul_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=ord_labels), width=0)+
+  theme_classic()
+ 
+ agg_pv_all <- create_agg(df= agg_pv_norm , form = formula( cbind(pv_norm_out, inv_pv_detrend_out, pv_detrend_out) ~ cumul_disc+ ord_labels), varlist = c( 'pv_norm_out','inv_pv_detrend_out', 'pv_detrend_out'))
+
+ggplot()+geom_line(data=agg_pv_all, aes(x= cumul_disc, y = inv_pv_detrend_out, color=ord_labels ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=cumul_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+theme_classic()
+
+ ggplot()+ geom_line(data=agg_pv_all, aes(x= cumul_disc, y = pv_detrend_out, color=ord_labels), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=cumul_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max, color=ord_labels), width=0)+
+  theme_classic()
+
+ ggplot()+ geom_line(data=agg_pv_all, aes(x= cumul_disc, y = pv_norm_out, color=ord_labels), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=cumul_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=ord_labels), width=0)+
+  theme_classic()
+ 
+agg_pv_all2 <- create_agg(df= agg_pv_norm , form = formula( cbind(pv_norm_out, inv_pv_detrend_out, pv_detrend_out) ~ cumul_disc), varlist = c( 'pv_norm_out','inv_pv_detrend_out', 'pv_detrend_out'))
+
+ggplot()+geom_line(data=agg_pv_all2, aes(x= cumul_disc, y = inv_pv_detrend_out ), size=2)+
+  geom_errorbar(data=agg_pv_all2, aes(x= cumul_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max), width=0)+theme_classic()
+
+pv_det_cumul_rate <-  ggplot()+ geom_line(data=agg_pv_all2, aes(x= cumul_disc, y = pv_detrend_out), size=2)+
+  geom_errorbar(data=agg_pv_all2, aes(x= cumul_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max), width=0)+
+  theme_classic()+xlab('Reward Rate')+ylab('Detrended Peak Velocity')
+
+ggsave('../plots/pv_det_cumul_rate.pdf', pv_det_cumul_rate, width =6 , height = 3, units = "in")
+ggsave('../plots/pv_det_cumul_rate.png', pv_det_cumul_rate, width =6 , height = 3, units = "in")
+
+pv_norm_cumul_rate <- ggplot()+ geom_line(data=agg_pv_all2, aes(x= cumul_disc, y = pv_norm_out), size=2)+
+  geom_errorbar(data=agg_pv_all2, aes(x= cumul_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max), width=0)+
+  theme_classic()+xlab('Reward Rate')+ylab('Normalized Peak Velocity')
+
+ggsave('../plots/pv_norm_cumul_rate.pdf', pv_norm_cumul_rate, width =6 , height = 3, units = "in")
+ggsave('../plots/pv_norm_cumul_rate.png', pv_norm_cumul_rate, width =6 , height = 3, units = "in")
+
+```
+
+
+## Reward rate metric selected:
+
+We are finally going with the metric that updates the reward rate based on what is on offer on each trial. This metric is not contaminated with noise from behavior. 
+
+```{r}
+data_tmp <- data %>% group_by(Subj_id) %>% mutate(rr_norm = (rate_update_opt - min(rate_update_opt))/max(rate_update_opt),rr_norm_disc = round( (rate_update_opt - min(rate_update_opt))/max(rate_update_opt-min(rate_update_opt)),1))
+
+data <- data_tmp
+
+agg_pv_norm <- create_agg(df= data, form = formula(  hd_norm ~ rr_norm_disc+ ord_labels+Subj_id) , varlist = c( 'hd_norm'))
+
+#  ggplot()+ geom_line(data=agg_pv_norm, aes(x= rr_norm_disc, y = inv_pv_detrend_out, color=ord_labels, group=Subj_id))+
+#   geom_errorbar(data=agg_pv_norm, aes(x=rr_norm_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+
+#   theme_classic()
+#  
+# pv_out_detrend_er <-  ggplot()+ geom_line(data=agg_pv_norm, aes(x= rr_norm_disc, y = pv_detrend_out, color=Subj_id, group=Subj_id))+
+#   geom_errorbar(data=agg_pv_norm, aes(x=rr_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max, color=Subj_id), width=0)+
+#   theme_classic()
+# 
+# pv_norm_out_er <- ggplot()+ geom_line(data=agg_pv_norm, aes(x= rr_norm_disc, y = pv_norm_out, color=Subj_id, group=Subj_id))+
+#   geom_errorbar(data=agg_pv_norm, aes(x= rr_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=Subj_id), width=0)+
+#   theme_classic()
+
+agg_pv_all <- create_agg(df= agg_pv_norm , form = formula( hd_norm ~ rr_norm_disc), varlist = c('hd_norm') )
+
+# ggplot()+geom_line(data=agg_pv_all, aes(x= rr_norm_disc, y = inv_pv_detrend_out, color=ord_labels ), size=2)+
+#   geom_errorbar(data=agg_pv_all, aes(x=rr_norm_disc, ymin = inv_pv_detrend_out_min, ymax = inv_pv_detrend_out_max, color=ord_labels), width=0)+theme_classic()
+# 
+# ggplot()+geom_line(data=agg_pv_all, aes(x= rr_norm_disc, y = pv_detrend_out, color=ord_labels ), size=2)+
+#   geom_errorbar(data=agg_pv_all, aes(x=rr_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max, color=ord_labels), width=0)+theme_classic()
+# 
+# ggplot()+geom_line(data=agg_pv_all, aes(x= rr_norm_disc, y = pv_norm_out, color=ord_labels ), size=2)+
+#   geom_errorbar(data=agg_pv_all, aes(x=rr_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max, color=ord_labels), width=0)+theme_classic()
+
+hd_norm_rr <- ggplot()+geom_line(data=agg_pv_all, aes(x= rr_norm_disc, y = hd_norm ), size=2)+
+  geom_errorbar(data=agg_pv_all, aes(x=rr_norm_disc, ymin = hd_norm_min, ymax = hd_norm_max), width=0)+theme_classic()+
+  ylab('Harvest Duration (norm)')+xlab('Reward Rate Bin')
+
+ggsave('../plots/hd_norm_rr.pdf', hd_norm_rr, width =6 , height = 3, units = "in")
+ggsave('../plots/hd_norm_rr.png', hd_norm_rr, width =6 , height = 3, units = "in")
+
+# agg_pv_all2 <- create_agg(df= agg_pv_norm , form = formula( cbind(pv_norm_out,inv_pv_detrend_out,pv_detrend_out) ~ rr_norm_disc), varlist = c('pv_norm_out', 'inv_pv_detrend_out','pv_detrend_out'))
+# 
+# pv_emp_rate<- ggplot()+geom_line(data=agg_pv_all2, aes(x= rr_norm_disc, y = pv_detrend_out ), size=2)+
+#   geom_errorbar(data=agg_pv_all, aes(x=rr_norm_disc, ymin = pv_detrend_out_min, ymax = pv_detrend_out_max), width=0)+theme_classic()+
+#   xlab('Reward Rate Bin')+ylab('Detrended Log Peak Velocity')
+# pv_emp_rate
+# 
+# # ggsave('../plots/pv_r_rate.pdf', pv_emp_rate, width =6 , height = 3, units = "in")
+# # ggsave('../plots/pv_emp_rate.png', pv_emp_rate, width =6 , height = 3, units = "in")
+# 
+# 
+# pv_norm_emp_rate <-ggplot()+geom_line(data=agg_pv_all2, aes(x= rr_norm_disc, y = pv_norm_out ), size=2)+
+#   geom_errorbar(data=agg_pv_all, aes(x=rr_norm_disc, ymin = pv_norm_out_min, ymax = pv_norm_out_max), width=0)+theme_classic()+
+#   xlab('Reward Rate Bin')+ylab('Normalized Peak Velocity')
+# pv_norm_emp_rate
+# ggsave('../plots/pv_norm_emp_rate.pdf', pv_norm_emp_rate, width =6 , height = 3, units = "in")
+# ggsave('../plots/pv_norm_emp_rate.png', pv_norm_emp_rate, width =6 , height = 3, units = "in")
+
+```
+
+

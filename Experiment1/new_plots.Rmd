@@ -1,0 +1,549 @@
+---
+title: "new_plot_exp1"
+author: "Shruthi Sukumar"
+date: "4/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library('ggplot2')
+require('reshape2')
+require(lmerTest)
+library('lme4')
+library(sjPlot)
+library(car)
+require(multcomp)
+```
+
+## Data Prep : Reward experiment 
+
+```{r data_prep, echo = FALSE}
+
+st.err <- function(x) {
+  sd(x)/sqrt(length(x))
+}
+
+data = read.csv(file='../foraging_reward_main.csv')
+data$Probe <- as.factor(data$Probe)
+data$Env <- as.factor(data$Env)
+data$Subj_id <- as.factor(data$Subj_id)
+data$Order <- as.factor(data$Order)
+data$travel_scale = data$travel_duration/1000
+data$movement_scale = data$movement_duration/1000
+data$harvest_scale = data$harvest_duration/1000
+data = data[data$Subj_id !=0,]
+subj_arr = unique(data$Subj_id)
+
+data$trial_scale = numeric(nrow(data))
+for (s in subj_arr){
+  for (e in 0:1){
+    trial_max = max(data$Trial[data$Subj_id==s & data$Env==e], na.rm = TRUE)
+    data$trial_scale[data$Subj_id==s & data$Env==e] = data$Trial[data$Subj_id==s & data$Env==e]/trial_max
+  }
+}
+
+data$pk_vel_out = numeric(nrow(data))
+data$reward = numeric(nrow(data))
+data$reward[data$Env==0] = 10
+data$reward[data$Env==1] = 50
+data$reward[data$Probe==1]=30 
+
+data$block_no = numeric(nrow(data))
+max_blocks = 4
+trials_per_block = 50
+
+for (s in subj_arr) {
+  
+  pv_avg = mean(data$pk_vel[data$Subj_id==s], na.rm=TRUE)
+  ts_avg = mean(data$travel_scale[data$Subj_id==s], na.rm=TRUE)
+  hs_avg = mean(data$harvest_scale[data$Subj_id==s], na.rm=TRUE)
+ 
+  for (e in 0:1){
+     
+    pv_env_avg = mean(data$pk_vel[data$Subj_id==s & data$Env==e], na.rm=TRUE)
+    pv = data$pk_vel[data$Subj_id==s & data$Env==e]
+    pv_out = append(pv[c(2:length(pv))], 0)
+    data$pk_vel_out[data$Subj_id==s & data$Env==e] <- pv_out
+    data$pv_out_norm[data$Subj_id==s & data$Env==e] = data$pk_vel_out[data$Subj_id==s & data$Env==e]/pv_avg
+    data$pv_norm[data$Subj_id == s & data$Env == e] = data$pk_vel[data$Subj_id==s & data$Env==e]/pv_avg
+    data$ts_norm[data$Subj_id == s & data$Env == e] = data$travel_scale[data$Subj_id==s & data$Env==e]/ts_avg
+    data$hs_norm[data$Subj_id == s & data$Env == e] = data$harvest_scale[data$Subj_id==s & data$Env==e]/hs_avg
+    data$pv_env_norm[data$Subj_id == s & data$Env == e] = data$pk_vel[data$Subj_id==s & data$Env==e]/pv_env_avg
+    
+    block_no  = data$block_no[data$Subj_id==s & data$Env==e]
+    trial_max = max(data$Trial[data$Subj_id==s & data$Env==e], na.rm = TRUE)
+    
+    
+    for (b in 1:ceiling(trial_max/trials_per_block)){
+      idxs = (((b-1)*trials_per_block + 1 ): min(trial_max, b*trials_per_block))
+      
+      block_no[idxs] = b-1
+    }
+    data$block_no[data$Subj_id==s & data$Env==e] = block_no
+    
+  }
+  
+}
+data$pk_vel[data$Subj_id==9 & data$Env==1 & data$Trial==32] = mean(data$pk_vel[data$Subj_id==9 & data$Env==1 & data$Trial==31], data$pk_vel[data$Subj_id==9 & data$Env==1 & data$Trial==33]) 
+
+
+data$pv_norm[data$Subj_id==9 & data$Env==1 & data$Trial==32] = mean(data$pv_norm[data$Subj_id==9 & data$Env==1 & data$Trial==31], data$pv_norm[data$Subj_id==9 & data$Env==1 & data$Trial==33]) 
+
+data$harvest_scale[data$Subj_id==9 & data$Env==1 & data$Trial==32] = mean(data$harvest_scale[data$Subj_id==9 & data$Env==1 & data$Trial==31], data$harvest_scale[data$Subj_id==9 & data$Env==1 & data$Trial==33]) 
+
+data$hs_norm[data$Subj_id==9 & data$Env==1 & data$Trial==32] = mean(data$hs_norm[data$Subj_id==9 & data$Env==1 & data$Trial==31], data$hs_norm[data$Subj_id==9 & data$Env==1 & data$Trial==33]) 
+
+data$berries[data$Subj_id==9 & data$Env==1 & data$Trial==32] = median(data$berries[data$Subj_id==9 & data$Env==1 & data$Trial==31], data$berries[data$Subj_id==9 & data$Env==1 & data$Trial==33]) 
+
+```
+
+## Create a new column for trial in block (1-50)
+
+```{r col_create, echo= FALSE}
+
+# First we need to define block number 
+
+
+
+data$trial_in_block = numeric(nrow(data))
+
+for (s in subj_arr) {
+    for (e in 0:1){
+    
+    bl_no = unique(data$block_no[data$Subj_id==s & data$Env == e])
+    for (b in bl_no) {
+      
+      len_block = length(data$trial_in_block[data$Subj_id==s & data$Env == e & data$block_no==b ])
+      # if (len_block < 50) {next}
+      data$trial_in_block[data$Subj_id==s & data$Env == e & data$block_no==b ] = seq(1,len_block,1)
+                         
+    }    
+  }
+  
+}
+    
+
+```
+
+
+
+## Average across blocks for each subjects
+
+errorbars are SEM for the blocks. 
+
+```{r agg_across_blocks,echo=FALSE}
+# looking at what happens when you average across blocks for each subject. 
+
+# first create the data_set 
+
+data$pk_vel[data$Trial == 1] <- NA
+
+agg_subj = aggregate(data=data, cbind(pk_vel, pv_norm, harvest_scale, hs_norm, berries) ~ Env + trial_in_block +Probe +Subj_id , mean )
+
+agg_subj$pv_diff = numeric(nrow(agg_subj))
+agg_subj$pv_diff[agg_subj$Env == 1] = agg_subj$pk_vel[agg_subj$Env == 1] - agg_subj$pk_vel[agg_subj$Env == 0]
+agg_subj$pv_diff[agg_subj$Env == 0] = agg_subj$pk_vel[agg_subj$Env == 1] - agg_subj$pk_vel[agg_subj$Env == 0]
+
+agg_subj$hs_diff = numeric(nrow(agg_subj))
+agg_subj$hs_diff[agg_subj$Env == 1] = agg_subj$harvest_scale[agg_subj$Env == 1] - agg_subj$harvest_scale[agg_subj$Env == 0]
+agg_subj$hs_diff[agg_subj$Env == 0] = agg_subj$harvest_scale[agg_subj$Env == 1] - agg_subj$harvest_scale[agg_subj$Env == 0]
+
+agg_subj$b_diff = numeric(nrow(agg_subj))
+agg_subj$b_diff[agg_subj$Env == 1] = agg_subj$berries[agg_subj$Env == 1] - agg_subj$berries[agg_subj$Env == 0]
+agg_subj$b_diff[agg_subj$Env == 0] = agg_subj$berries[agg_subj$Env == 1] - agg_subj$berries[agg_subj$Env == 0]
+# cnames = colnames(agg_subj)
+# agg_sd_subj = aggregate(data=data, cbind(pk_vel, pv_norm) ~ Env + trial_in_block +Probe +Subj_id , st.err )
+# agg_sd_subj$pv_diff[agg_subj$Env == 1] = sqrt(agg_sd_subj$pk_vel[agg_sd_subj$Env==1]^2 + agg_sd_subj$pk_vel[agg_sd_subj$Env==0]^2)
+# agg_sd_subj$pv_diff[agg_subj$Env == 0] = sqrt(agg_sd_subj$pk_vel[agg_sd_subj$Env==1]^2 + agg_sd_subj$pk_vel[agg_sd_subj$Env==0]^2)
+# 
+# # agg_sd_subj$hs_diff = sqrt(agg_sd_subj$harvest_scale[agg_sd_subj$Env==1]^2 + agg_sd_subj$harvest_scale[agg_sd_subj$Env==0]^2)
+# varlist = c('pv_diff','pk_vel','pv_norm','harvest_scale','hs_diff')
+# 
+# varlist
+# for (i in 1:length(varlist)) {
+#   v= varlist[i]
+#   max_varname = paste(v,'_max', sep="")
+#   min_varname = paste(v,'_min', sep="")
+#   print(min_varname)
+#   agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+#   cnames = c(cnames, min_varname, max_varname)
+#   
+# }
+# 
+# colnames(agg_subj) <- cnames
+# 
+# ## are there any tests needed 
+# 
+# print(colnames(agg_subj))
+# 
+# ggplot(data=agg_subj)+geom_line(aes(x= trial_in_block, y= pv_norm, color=factor(Env) ), width=1.5)+
+#   geom_errorbar(aes(x=trial_in_block, ymin = pv_norm_min, ymax= pv_norm_max, color =factor(Env) ), width=0)+ 
+#   facet_wrap(~Subj_id, scales="free")+
+#   theme_classic()
+
+
+```
+
+
+```{r agg_all_subjs, echo=FALSE}
+
+agg_all = aggregate(data=agg_subj, cbind(pk_vel, pv_norm, pv_diff, harvest_scale, hs_norm, hs_diff, berries, b_diff) ~ Env + trial_in_block +Probe  , mean )
+
+cnames = colnames(agg_all)
+agg_sd_all = aggregate(data=agg_subj, cbind(pk_vel, pv_norm, pv_diff, harvest_scale, hs_norm, hs_diff, berries, b_diff) ~ Env + trial_in_block +Probe  , st.err )
+
+
+
+varlist = c('pk_vel','pv_norm', 'pv_diff', 'harvest_scale','hs_norm', 'hs_diff', 'berries', 'b_diff')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_all = cbind.data.frame(agg_all, agg_all[v] - agg_sd_all[v], agg_all[v] + agg_sd_all[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_all) <- cnames
+
+## are there any tests needed 
+
+print(colnames(agg_all))
+
+th <- theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+p_block <- ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y=pv_norm, color=factor(Env) ), width=1.5)+
+  geom_errorbar(aes(x=trial_in_block, ymin = pv_norm_min, ymax=pv_norm_max, color =factor(Env) ), width=0)+
+  annotate("rect", xmin = 21, xmax = 30, ymin = 0.85, ymax = 1.15,alpha = .1,fill = "blue")+
+  xlab('Trial in block') +
+  th
+
+p_block 
+
+fn = file.path('..','plots','pv_norm_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_block , device="pdf", width=8, height =6 )
+
+
+```
+
+## Blockwise stats as required by Alaa and Reza
+
+We are going to do a 1 way repeated measures ANOVA on the environment trials per subject
+
+```{r}
+agg_aov = aggregate(data= data, cbind(pk_vel, harvest_scale)~ trial_in_block + Env + Probe + Subj_id, mean )
+
+agg_aov_env = agg_aov[agg_aov$Probe == 0,]
+
+fig3.aov <- with(data = agg_aov_env, aov(pk_vel~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+
+```
+
+Looking at the one-way anova for probe trials alone
+
+```{r}
+
+agg_aov_env = agg_aov[agg_aov$Probe == 1,]
+
+fig3.aov <- with(data = agg_aov_env, aov(pk_vel~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+
+```
+
+## Fully Aggregated Statistics
+
+```{r aov_agg_full}
+
+agg_aov_full = aggregate(data= data, cbind(pk_vel, pv_norm, harvest_scale)~ Env + Probe + Subj_id, mean )
+
+agg_aov_probe = agg_aov_full[agg_aov_full$Probe==1,]
+
+fig3b.aov <- with(data = agg_aov_probe, aov(pk_vel~ Env +Error(Subj_id) ))
+
+# summary(fig3b.aov)
+
+pv_avg_probe_low = agg_aov_probe$pv_norm[agg_aov_probe$Env==0]
+pv_avg_probe_high = agg_aov_probe$pv_norm[agg_aov_probe$Env==1]
+
+t.test(pv_avg_probe_low, pv_avg_probe_high, paired=TRUE)
+
+```
+
+##Remove the first trial in the block and test both anovas
+
+```{r}
+data_remove_first_probe_trial = data
+print(data_remove_first_probe_trial$trial_in_block[data_remove_first_probe_trial$trial_in_block==21] )
+
+agg_aov_full = aggregate(data= data, cbind(pk_vel, pv_norm, harvest_scale)~ Env + Probe + Subj_id, mean )
+
+agg_aov_probe = agg_aov_full[agg_aov_full$Probe==1,]
+
+fig3b.aov <- with(data = agg_aov_probe, aov(pk_vel~ Env +Error(Subj_id) ))
+
+# summary(fig3b.aov)
+
+pv_avg_probe_low = agg_aov_probe$pv_norm[agg_aov_probe$Env==0]
+pv_avg_probe_high = agg_aov_probe$pv_norm[agg_aov_probe$Env==1]
+
+t.test(pv_avg_probe_low, pv_avg_probe_high, paired=TRUE)
+```
+
+
+
+## Delta curves
+
+```{r create_delta, echo = FALSE}
+
+
+agg_new = agg_all[agg_all$Env==0,]
+p_diff <- ggplot(data=agg_new)+geom_line(aes(x= trial_in_block, y=pv_diff ))+
+  geom_errorbar(aes(x=trial_in_block, ymin = pv_diff_min, ymax= pv_diff_max, width=0 ))+
+  geom_hline(yintercept=0, linetype = 'dashed')+
+  annotate("rect", xmin = 21, xmax = 30, ymin = -0.05, ymax = 0.1,alpha = .1,fill = "blue")+
+  th
+
+p_diff
+
+fn = file.path('..','plots','pv_diff_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_diff , device="pdf", width=8, height =6 )
+
+```
+
+## Normalized Harvest Duration 
+
+```{r}
+p_har_block <- ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y=hs_norm, color=factor(Env) ))+
+  geom_errorbar(aes(x=trial_in_block, ymin = hs_norm_min, ymax=hs_norm_max, color =factor(Env) ), width=0)+
+  annotate("rect", xmin = 21, xmax = 30, ymin = 0.85, ymax = 1.15,alpha = .1,fill = "blue")+
+  xlab('Trial in block') +
+  th
+
+p_har_block 
+
+fn = file.path('..','plots','har_norm_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_har_block , device="pdf", width=8, height =6 )
+
+```
+
+
+## Delta curves
+
+```{r create_delta, echo = FALSE}
+
+
+agg_new = agg_all[agg_all$Env==0,]
+p_har_diff <- ggplot(data=agg_new)+geom_line(aes(x= trial_in_block, y=hs_diff ))+
+  geom_errorbar(aes(x=trial_in_block, ymin = hs_diff_min, ymax= hs_diff_max, width=0 ))+
+  geom_hline(yintercept=0, linetype = 'dashed')+
+  annotate("rect", xmin = 21, xmax = 30, ymin = -0.05, ymax = 0.1,alpha = .1,fill = "blue")+
+  th
+
+p_har_diff
+
+fn = file.path('..','plots','hs_diff_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_har_diff , device="pdf", width=8, height =6 )
+
+```
+
+## Berries
+
+```{r}
+p_ber_block <- ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y=berries, color=factor(Env) ))+
+  geom_errorbar(aes(x=trial_in_block, ymin = berries_min, ymax= berries_max, color =factor(Env) ), width=0)+
+  annotate("rect", xmin = 21, xmax = 30, ymin = 0.85, ymax = 1.15,alpha = .1,fill = "blue")+
+  xlab('Trial in block') +
+  th
+
+p_ber_block 
+
+fn = file.path('..','plots','berry_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_ber_block , device="pdf", width=8, height =6 )
+
+```
+
+
+## Delta curves
+
+```{r create_delta, echo = FALSE}
+
+
+agg_new = agg_all[agg_all$Env==0,]
+p_ber_diff <- ggplot(data=agg_new)+geom_line(aes(x= trial_in_block, y=b_diff ))+
+  geom_errorbar(aes(x=trial_in_block, ymin = b_diff_min, ymax= b_diff_max, width=0 ))+
+  geom_hline(yintercept=0, linetype = 'dashed')+
+  annotate("rect", xmin = 21, xmax = 30, ymin = -0.05, ymax = 0.1,alpha = .1,fill = "blue")+
+  th
+
+p_ber_diff
+
+fn = file.path('..','plots','b_diff_trial_block.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_ber_diff , device="pdf", width=8, height =6 )
+
+```
+```{r}
+
+agg_aov_env = agg_aov[agg_aov$Probe == 0,]
+fig3.aov <- with(data = agg_aov_env, aov(harvest_scale~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+
+```
+
+Looking at the one-way anova for probe trials alone
+
+```{r}
+
+agg_aov_env = agg_aov[agg_aov$Probe == 1,]
+fig3.aov <- with(data = agg_aov_env, aov(harvest_scale~ Env + trial_in_block + Error(Subj_id) ))
+summary(fig3.aov)
+
+```
+```{r}
+agg_aov = aggregate(data= data, cbind(pk_vel, harvest_scale)~ trial_in_block + Env + Probe + Subj_id, mean )
+
+
+agg_aov1 = agg_aov[agg_aov$Env == 0,]
+agg_aov_env11 = agg_aov1[agg_aov1$trial_in_block == 20 | agg_aov1$trial_in_block == 19 | agg_aov1$trial_in_block == 21 | agg_aov1$trial_in_block == 22 |agg_aov1$trial_in_block == 30 | agg_aov1$trial_in_block == 29 | agg_aov1$trial_in_block == 31| agg_aov1$trial_in_block == 32,]
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 21], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 20], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 21], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 22], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 31], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 30], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 31], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 32], paired=TRUE )
+print(imm_trials_ttest)
+
+```
+Testing pairs
+```{r}
+agg_aov_env11$Subj_id[agg_aov_env11$trial_in_block == 20]
+agg_aov_env11$Subj_id[agg_aov_env11$trial_in_block == 21]
+```
+
+
+Harvest Duration
+
+```{r}
+imm_trials_ttest = t.test( agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 20], agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 19], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 30], agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 29], paired=TRUE )
+print(imm_trials_ttest)
+```
+
+
+```{r}
+agg_aov1 = agg_aov[agg_aov$Env == 1,]
+agg_aov_env11 = agg_aov1[agg_aov1$trial_in_block == 20 | agg_aov1$trial_in_block == 19 | agg_aov1$trial_in_block == 21 | agg_aov1$trial_in_block == 22 |agg_aov1$trial_in_block == 30 | agg_aov1$trial_in_block == 29 | agg_aov1$trial_in_block == 31| agg_aov1$trial_in_block == 32,]
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 21], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 20], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 21], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 22], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 31], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 30], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 31], agg_aov_env11$pk_vel[agg_aov_env11$trial_in_block == 32], paired=TRUE )
+print(imm_trials_ttest)
+```
+
+Harvest Duration
+
+```{r}
+imm_trials_ttest = t.test( agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 19], agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 20], paired=TRUE )
+print(imm_trials_ttest)
+
+imm_trials_ttest = t.test( agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 29], agg_aov_env11$harvest_scale[agg_aov_env11$trial_in_block == 30], paired=TRUE )
+print(imm_trials_ttest)
+```
+
+
+## To determine the regions where the immediate effects overwhelm the usual environmental changes
+
+```{r}
+
+data$pv_tr_env_norm = numeric(nrow(data))
+data$hs_tr_env_norm = numeric(nrow(data))
+
+for (s in subj_arr) {
+  
+  for (e in 0:1 ){
+    
+    for (p in 0:1){
+      
+      pv_env_tr_avg = mean(data$pk_vel[data$Subj_id==s & data$Env==e & data$Probe == p], na.rm=TRUE)
+      data$pv_tr_env_norm[data$Subj_id==s & data$Env==e & data$Probe == p] = data$pk_vel[data$Subj_id==s & data$Env==e & data$Probe == p]/ pv_env_tr_avg
+      
+      hs_env_tr_avg = mean(data$harvest_scale[data$Subj_id==s & data$Env==e & data$Probe == p], na.rm=TRUE)
+      data$hs_tr_env_norm[data$Subj_id==s & data$Env==e & data$Probe == p] = data$harvest_scale[data$Subj_id==s & data$Env==e & data$Probe == p]/ hs_env_tr_avg
+      
+    }
+    
+  }
+  
+}
+
+```
+
+Now plot the average behavior of this normalized metric in a block 
+
+```{r}
+agg_subj = aggregate(data=data, cbind(pv_tr_env_norm, hs_tr_env_norm) ~ Env + trial_in_block +Probe +Subj_id , mean )
+
+agg_all = aggregate(data=agg_subj, cbind(pv_tr_env_norm, hs_tr_env_norm) ~ Env + trial_in_block +Probe  , mean )
+
+cnames = colnames(agg_all)
+agg_sd_all = aggregate(data=agg_subj, cbind(pv_tr_env_norm, hs_tr_env_norm) ~ Env + trial_in_block +Probe  , st.err )
+
+
+
+varlist = c('pv_tr_env_norm', 'hs_tr_env_norm')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_all = cbind.data.frame(agg_all, agg_all[v] - agg_sd_all[v], agg_all[v] + agg_sd_all[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_all) <- cnames
+
+```
+plotting the blockwise trial series
+
+
+```{r}
+ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y= pv_tr_env_norm, color=factor(Env) ))+
+  geom_errorbar(aes(x=trial_in_block, ymin = pv_tr_env_norm_min, ymax= pv_tr_env_norm_max, color =factor(Env) ), width=0)+
+  annotate("rect", xmin = 21, xmax = 30, ymin = 0.85, ymax = 1.15,alpha = .1,fill = "blue")+
+  xlab('Trial in block') +
+  facet_wrap(~Env, ncol = 2)+
+  geom_hline(yintercept = 1.0, linetype='dashed')+
+  th
+```
+
