@@ -10,7 +10,7 @@ library(readr)
 setwd("C:/Users/shrut/Documents/Research/foraging_reward_new/rfiles")
 ## read in experiment 3 data
 
-data.exp3 <- read_rds('exp3_dataframe.rds')
+data.exp3 <- read_rds('exp2_dataframe.rds')
 
 data_tmp <- data.exp3 %>% group_by(Subj_id, Env) %>% 
   mutate( trial_bin_ord = if_else( Order!=Env,1+round(Trial/max(Trial,na.rm=TRUE), 1),round(Trial/max(Trial,na.rm=TRUE), 1) ))

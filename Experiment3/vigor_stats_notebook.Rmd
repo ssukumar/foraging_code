@@ -27,7 +27,7 @@ st.err <- function(x) {
   sd(x)/sqrt(length(x))
 }
 
-data = read.csv(file='../table_R.csv')
+data = read.csv(file='expeirment3_data')
 data$Probe <- as.factor(data$Probe)
 data$Subj_id <- as.factor(data$Subj_id)
 data$Order <- as.factor(data$Order)
