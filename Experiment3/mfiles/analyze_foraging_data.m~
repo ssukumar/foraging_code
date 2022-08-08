@@ -1,0 +1,735 @@
+function analyze_foraging_data(subj, exp, test)
+% Code that is created to analyze the data for all subjects that have done
+% the two foraging experiments designed by Shruthi Sukumar
+% Code accepts 3-letter subject code.
+
+% Make sure all residual graphs are closed
+close all;
+
+if nargin<1
+    subj = 'HMC';
+    exp = 1;
+    test = 1;
+end
+
+conditions = {'low','high'};
+
+if exp == 1
+    exp_name = 'foraging_';
+else
+    exp_name = 'harvest_';
+end
+
+fprintf('Running throught %s`s data \n', subj);
+
+% Code for robot filename
+
+ret_subj = @(subj,exp_name,cond) ( strcat(exp_name,subj,'20_',cond,...
+    num2str(test+1)));
+
+filenames = {ret_subj(subj,exp_name, conditions{1}), ret_subj(subj, ...
+    exp_name,conditions{2}) };
+
+%Data directory
+dir_file = '../';
+
+% When fn == 1 the contents of the matfile are associated with the low
+% effort environment in both experiments. This is because of how filenames
+% are declared above.
+
+global data_subj;
+
+for fn = 1:length(filenames)
+    
+    % Put in checks to ensure that the environment order is right and that
+    % the trials are probe/env according to the predetermined order
+    
+    
+    % Read data from the existing robot data folder
+    filename = filenames{fn};
+    filedir = fullfile(dir_file, 'robot_data', filename);
+    ix_1 = length(exp_name)+1;
+    subj_mat_filename = strcat(filename(ix_1:end),'.mat');
+    discard_mat_name = strcat(filename(ix_1:end),'_discard', '.mat');
+    subj_dir = fullfile(dir_file, 'matfiles_data',subj);
+    if ~isdir(subj_dir)
+        mkdir(subj_dir);
+    end
+    mat_filename = fullfile(dir_file,'matfiles_data', subj,...
+            subj_mat_filename);
+    discard_mat_name = fullfile(dir_file,'matfiles_data', subj, discard_mat_name);
+    
+    logfnid = 15; % Log function ID used for robotconv.m
+    f= pwd;
+    
+    if (exist(mat_filename, 'file') == 2)
+        load(mat_filename);
+        load(discard_mat_name);
+        cd(filedir);
+    else
+        
+        T = robotdataread(filename,filedir, logfnid);
+        discard_trials = [];
+        save(discard_mat_name, 'discard_trials');
+        save(mat_filename, 'T');
+    end
+    cd(f);
+    
+    ntrials = T.trial_arr'; % Trials that actually ocurred
+    num_trials = max(T.trialnumber);
+    
+    % Initialize all required variables
+    
+    reqd_vars = {'harvest_duration','patch_residence_duration',...
+        'grip_drop_duration', 'travel_duration','movement_duration',...
+        'pk_vel', 'pk_vel_ix', 'pk_vel_ix_rep','pk_acc_rep'...
+        'pk_acc_ix_rep','berries', 'grip_norm_avg','grip_valid_ix',...
+        'vel_profile','vel_profile_rep','x_profile','x_profile_rep',...
+        'time_ms_rep', 'probe_trials', 'profile_shift_rep', ...
+        'force_integral', 'force_per_berry','force_rate_max',...
+        'max_distance'};
+    
+    data_subj{fn} = cell2struct(repmat({nan(1,num_trials)},...
+        length(reqd_vars),1),reqd_vars);
+    
+    data_subj{fn}.grip_valid_ix = cell(1,num_trials);
+    data_subj{fn}.vel_profile = cell(1,num_trials);
+    data_subj{fn}.vel_profile_rep = cell(1,num_trials);
+    data_subj{fn}.x_profile = cell(1,num_trials);
+    data_subj{fn}.x_profile_rep = cell(1,num_trials);
+    data_subj{fn}.y_profile = cell(1,num_trials);
+    data_subj{fn}.y_profile_rep = cell(1,num_trials);
+    data_subj{fn}.time_ms_rep = cell(1,num_trials);
+    
+    probe_indices = [21:30, 71:80, 121:130, 171:180];
+    
+    data_subj{fn}.probe_trials = probe_indices;
+    
+    grip_tol = 2; % Tolerance of 2 newtons
+    time_ms_prev = [];
+    outtarget_time = 0;
+    
+    for tr = 1:num_trials
+        
+        if ~isempty(find(tr==ntrials))
+            
+            data = T.framedata(tr);
+            grip_force = data.grip_force;
+            
+            x= data.x;
+            y= data.y;
+            vx = data.vx;
+            vy = data.vy;
+            
+            data1 = find_discont(x,y,vx,data,0,1);
+            
+            vvx = diff23f5(data1.x,1/200,10);
+            vvy = diff23f5(data1.y, 1/200, 10);
+            
+            data_subj{fn}.vel_profile{tr} = vvx(:,2);
+            data_subj{fn}.x_profile{tr} = x;
+            data_subj{fn}.y_profile{tr} = y;
+            score = data.score;
+            time_ms = data.time_ms;
+            
+            % Getting the Indices for time stamps of when the entered and
+            % left patches
+            attarget_ix = find(data.statenumber==6, 1, 'first');
+            outtarget_ix = find( data.statenumber==6,1,'last');
+            
+            if exp == 1 || ~isempty(find(tr==probe_indices)) 
+                grip_req = 30;
+            elseif exp == 2 && fn ==1
+                grip_req = 10;
+            else 
+                grip_req = 50;
+            end
+            
+            
+            if isempty(find(tr == discard_trials))
+                
+                % #########Find harvest duration#######
+                
+                compute_harvest_duration(fn ,tr, score, grip_force,...
+                    grip_req, grip_tol, time_ms, attarget_ix, outtarget_ix);
+                
+                % determine if trials need to be discarded 
+                if ~isempty(data_subj{fn}.grip_valid_ix{tr})
+                    
+                    return_pk_vel(fn, tr,0, vvx, x, y, time_ms, time_ms_prev);
+                    
+                    get_mvt_duration(fn, tr, time_ms, attarget_ix,...
+                        outtarget_time);
+                    %plot_diagnostics(3, fn, tr, vvx);
+                else
+                    discard_trials = [discard_trials, tr];
+                    save(discard_mat_name, 'discard_trials');
+                    continue;
+                end
+%             else 
+%                 % determining what happens on those discarded trials
+%                 return_pk_vel(fn, tr,1, vvx, time_ms, time_ms_prev);
+%                 get_mvt_duration(fn, tr, time_ms, attarget_ix, outtarget_time);
+            end
+            
+        end
+        
+        % current val to be used in next trial
+        outtarget_time = time_ms(outtarget_ix);
+        time_ms_prev = time_ms;
+        
+    end
+    
+end
+
+fig_ix = plot_comparisons_env(1);
+% plot_diag_env(fig_ix);
+plot_mvt_traces(fig_ix);
+fprintf('Saving %s summary data....\n',subj);
+save(fullfile(dir_file,'matfiles_data', subj,'data_subj.mat'),'data_subj');
+
+
+% Function to compute harvest duration
+function compute_harvest_duration(fn ,tr, score, grip_force, grip_req,...
+    grip_tol, time_ms, attarget_ix, outtarget_ix)
+% Computes harvest duration
+
+global data_subj;
+
+% Index at which score is reset to zero 
+% Sometimes the score isn't reset from the previous trial until a few
+% indices after the beginning of a new trial 
+
+score_first0_ix = find(score==0, 1, 'first');
+
+% First index when the subject is in a new patch and starts harvesting
+start_grip_ix = score_first0_ix - 1 + ...
+    find((grip_force(score_first0_ix:end) >=grip_req-grip_tol) & ...
+    (score(score_first0_ix:end) >0),1,'first');
+
+%Last point of harvest within patch in this trial
+end_grip_ix =  score_first0_ix - 1 + ...
+    find(grip_force(score_first0_ix:end) >=grip_req-grip_tol & ...
+    score(score_first0_ix:end) >0,1,'last');
+
+grip_drop_ix = start_grip_ix - 1+ find(grip_force(start_grip_ix: ...
+    end_grip_ix) < grip_req-grip_tol);
+
+if ~isempty(grip_drop_ix)
+    data_subj{fn}.grip_drop_time(tr) = length(grip_drop_ix) * 5; % 5ms is sampling period of robot
+else
+    data_subj{fn}.grip_drop_time(tr) = 0;
+end
+
+if isempty(start_grip_ix)
+    data_subj{fn}.harvest_duration(tr) = nan;
+    data_subj{fn}.patch_residence_duration(tr) = nan;
+else
+    data_subj{fn}.harvest_duration(tr) = time_ms(end_grip_ix) - ...
+        time_ms(start_grip_ix) - data_subj{fn}.grip_drop_time(tr);
+    data_subj{fn}.patch_residence_duration(tr) = time_ms(outtarget_ix) - ...
+        time_ms(attarget_ix);
+end
+
+if isempty(start_grip_ix)
+    data_subj{fn}.grip_valid_ix{tr} = [];
+else
+    data_subj{fn}.grip_valid_ix{tr} = setxor([start_grip_ix:end_grip_ix...
+        ], grip_drop_ix);
+end
+
+% Also determine the rate of force generation in a patch
+
+max_force_ix = start_grip_ix - 1 + find(grip_force( start_grip_ix:...
+    end_grip_ix) == max(grip_force(start_grip_ix:end_grip_ix)),1,'first');
+
+grip_flipped = grip_force(end:-1:1);
+low_thresh = 10; % enforced in tcl code. lower force threshold
+start_grip_flipped_ix = length(grip_force) - start_grip_ix + 1;
+% find the point when subject begins to grip to get reward
+begin_grip_flipped_ix = find(grip_flipped(start_grip_flipped_ix:end)<=10,...
+    1, 'first') + start_grip_flipped_ix -1;
+begin_grip_ix = length(grip_flipped) - begin_grip_flipped_ix + 1;
+
+force_rate = diff23f5(grip_force,1/200,10);
+force_rate= force_rate(:,2);
+force_rate_max = max(force_rate(begin_grip_ix: start_grip_ix));
+
+if ~isempty(start_grip_ix)
+    data_subj{fn}.force_rate_max(tr) = force_rate_max;
+else
+    data_subj{fn}.force_rate_max(tr) = 0;
+end
+% Compute the sum of forces generated through the time in patch
+data_subj{fn}.force_integral(tr) = sum(grip_force(attarget_ix: ... 
+    outtarget_ix))/length(grip_force(attarget_ix:outtarget_ix));
+
+% Compute the integral of force per number of berries
+if ~isempty(start_grip_ix)
+    data_subj{fn}.force_per_berry(tr) = sum(grip_force(start_grip_ix:end_grip_ix))...
+        ./sum(score(start_grip_ix:end_grip_ix));
+else
+    data_subj{fn}.force_per_berry(tr) = nan;
+end
+    
+
+
+function return_pk_vel(fn,tr,is_discard,vvx, x, y, time_ms, time_ms_prev)
+% Returns index of peak velocity and the value
+% Also repairs the velocity profiles : trial i vel profile is the movement
+% to patch # i
+
+global data_subj;
+
+if ~isempty(data_subj{fn}.grip_valid_ix{tr}) 
+    start_grip_ix = data_subj{fn}.grip_valid_ix{tr}(1);
+    [data_subj{fn}.pk_vel(tr),data_subj{fn}.pk_vel_ix(tr)] = ...
+        max(abs(vvx(1:start_grip_ix,2)));
+else
+    [data_subj{fn}.pk_vel(tr),data_subj{fn}.pk_vel_ix(tr)] = ...
+    max(abs(vvx(1:end,2)));
+end
+
+
+% Repair velocity profiles
+
+if tr==1 
+    data_subj{fn}.vel_profile_rep{tr} = vvx(:,2)';
+    data_subj{fn}.x_profile_rep{tr} = x';
+    data_subj{fn}.y_profile_rep{tr} = y';
+    data_subj{fn}.pk_vel_ix_rep(tr) = data_subj{fn}.pk_vel_ix(tr);
+    data_subj{fn}.time_ms_rep{tr} = time_ms';
+    data_subj{fn}.profile_shift_rep(tr)=  0;
+else
+    if is_discard == 1
+        profile_end_ix = length(data_subj{fn}.vel_profile{tr});
+    else
+        profile_end_ix = round(3*length(data_subj{fn}.vel_profile{tr})/4);
+    end
+   
+
+    vel_prof_rep = [data_subj{fn}.vel_profile{tr-1}(end-round(length(...
+        data_subj{fn}.vel_profile{tr-1})/3):end)' ...
+        data_subj{fn}.vel_profile{tr}(1:profile_end_ix)' ];
+    x_profile_rep = [data_subj{fn}.x_profile{tr-1}(end-round(length(...
+        data_subj{fn}.x_profile{tr-1})/3):end)' ...
+        data_subj{fn}.x_profile{tr}(1:profile_end_ix)' ];
+    y_profile_rep = [data_subj{fn}.y_profile{tr-1}(end-round(length(...
+        data_subj{fn}.y_profile{tr-1})/3):end)' ...
+        data_subj{fn}.y_profile{tr}(1:profile_end_ix)' ];
+    time_stitch = [time_ms_prev(end-round(length(data_subj{fn...
+        }.vel_profile{tr-1})/3):end)',time_ms(1:profile_end_ix)'];
+    t_miss = time_ms(1) - time_ms_prev(end);
+    t_vec = linspace(time_ms_prev(end)+5, time_ms(1), t_miss/5 +1 );
+    vel_bet = interp1(time_stitch, vel_prof_rep, t_vec);
+    x_bet = interp1(time_stitch, x_profile_rep, t_vec);
+    y_bet = interp1(time_stitch, y_profile_rep, t_vec);
+    vel_prof_rep = [data_subj{fn}.vel_profile{tr-1}(end-round(length(...
+        data_subj{fn}.vel_profile{tr-1})/2):end)', vel_bet, ...
+        data_subj{fn}.vel_profile{tr}(1:profile_end_ix)' ];
+    x_profile_rep =  [data_subj{fn}.x_profile{tr-1}(end-round(length(...
+        data_subj{fn}.x_profile{tr-1})/2):end)', x_bet, ...
+        data_subj{fn}.x_profile{tr}(1:profile_end_ix)' ];
+    y_profile_rep =  [data_subj{fn}.y_profile{tr-1}(end-round(length(...
+        data_subj{fn}.y_profile{tr-1})/2):end)', y_bet, ...
+        data_subj{fn}.y_profile{tr}(1:profile_end_ix)' ];
+    data_subj{fn}.vel_profile_rep{tr} = vel_prof_rep;
+    data_subj{fn}.x_profile_rep{tr} = x_profile_rep;
+    data_subj{fn}.y_profile_rep{tr} = y_profile_rep;
+    data_subj{fn}.pk_vel_ix_rep(tr) = length([data_subj{fn}.vel_profile{tr-1}(...
+        end-round(length(data_subj{fn}.vel_profile{tr-1})/2):end)',...
+            vel_bet]) + data_subj{fn}.pk_vel_ix(tr) - 1;
+    time_ms_rep =  [time_ms_prev(end-round(length(data_subj{fn...
+        }.vel_profile{tr-1})/2):end)', t_vec, time_ms(1:profile_end_ix)'];
+    data_subj{fn}.time_ms_rep{tr} = time_ms_rep;
+    data_subj{fn}.profile_shift_rep(tr)=  length([data_subj{fn}.vel_profile{tr-1}(...
+        end-round(length(data_subj{fn}.vel_profile{tr-1})/2):end)',...
+            vel_bet]);
+    
+end
+
+
+
+function get_mvt_duration(fn, tr, time_ms, attarget_ix, outtarget_time)
+% Computes the movement duration of the reach between two patches 
+% This is based on onset time estimated from the previous trial and offset
+% time estimated from current trial. Therefore, movement duration on trial
+% i corresponds to movement to patch i.
+
+global data_subj;
+
+% First compute the travel durations, aka , the entire duration spent
+% between when the subject left the last patch to when they entered the
+% current patch
+
+if tr ~=1
+    data_subj{fn}.travel_duration(tr) = time_ms(attarget_ix) - outtarget_time;
+else 
+    data_subj{fn}.travel_duration(tr) = nan;
+end
+
+% Compute movement duration based on repaired velocity profiles and
+% repaired time_ms matrix
+
+% free parameters that can be changed 
+sd_win = 10; % Window for computing standard deviation
+vel_thresh = 0.005;
+sd_thresh = 0.001;
+vx = data_subj{fn}.vel_profile_rep{tr};
+sd_vec = [];
+for i =1:length(vx)-sd_win
+    sd_vec(end+1) = std(vx(i:i+sd_win));
+end
+
+pk_vel_ix_rep = data_subj{fn}.pk_vel_ix_rep(tr);
+if data_subj{fn}.vel_profile_rep{tr}(pk_vel_ix_rep) < 0 
+    vel_profile_rep = -1 * data_subj{fn}.vel_profile_rep{tr};
+else
+    vel_profile_rep = data_subj{fn}.vel_profile_rep{tr};
+end
+acc_profile_rep = diff23f5(vel_profile_rep', 1/200, 10);
+acc_profile_rep = acc_profile_rep(:,2);
+[data_subj{fn}.pk_acc_rep(tr), data_subj{fn}.pk_acc_ix_rep(tr)] =...
+        max(acc_profile_rep(1:pk_vel_ix_rep));
+time_ms_rep = data_subj{fn}.time_ms_rep{tr};
+
+vel_flipped = vel_profile_rep(end:-1:1);
+acc_flipped = acc_profile_rep(end:-1:1);
+pk_vel_ix_flipped = length(vel_flipped) - pk_vel_ix_rep + 1;
+
+% determining indices on the repaired array (REMEMBER)
+onset_ix_flipped = pk_vel_ix_flipped + find(abs(vel_flipped(...
+    pk_vel_ix_flipped:end)) < vel_thresh,1,'first');
+
+
+sd_flipped = sd_vec(end:-1:1); 
+sd_drop_flipped = find(sd_flipped(pk_vel_ix_flipped:end)<sd_thresh, 1,...
+    'first') + pk_vel_ix_flipped;
+sd_ix_rep = length(sd_vec) - sd_drop_flipped + 1;
+
+if onset_ix_flipped > sd_drop_flipped 
+    onset_ix_rep = length(vel_flipped)- onset_ix_flipped + 1;
+else
+    onset_ix_rep = sd_ix_rep;
+end
+
+if isempty(onset_ix_rep)
+   onset_ix_rep = find(vel_profile_rep(1:pk_vel_ix_rep) < 0 ,1,'last');
+    
+end
+
+onset_time = time_ms_rep(onset_ix_rep);
+
+vel0_ix_rep = pk_vel_ix_rep + find(vel_profile_rep(pk_vel_ix_rep:end) <0 ...
+    , 1, 'first')-1;
+
+sd0_ix_rep = pk_vel_ix_rep + find(sd_vec(pk_vel_ix_rep:end) < ...
+    sd_thresh,1,'first')-1;
+
+if ~isempty(vel0_ix_rep) && ~isempty(sd0_ix_rep)
+    if sd0_ix_rep > vel0_ix_rep
+        offset_ix_rep = sd0_ix_rep;
+    else
+        offset_ix_rep = vel0_ix_rep;
+    end
+else
+    
+    offset_ix_rep = pk_vel_ix_rep + find(vel_profile_rep(pk_vel_ix_rep:end)...
+        == min(vel_profile_rep(pk_vel_ix_rep:end)),1,'first')-1;
+end
+
+
+grip_valid_ix_rep = data_subj{fn}.grip_valid_ix{tr} + ...
+    data_subj{fn}.profile_shift_rep(tr) -1;
+
+if ~isempty(grip_valid_ix_rep)
+    if grip_valid_ix_rep(1) < offset_ix_rep
+        offset_ix_rep = grip_valid_ix_rep(1);
+    end
+end
+
+offset_time = time_ms_rep(offset_ix_rep);
+x_profile_rep = data_subj{fn}.x_profile_rep{tr};
+
+data_subj{fn}.max_distance(tr) = max(x_profile_rep) - min(x_profile_rep);
+
+if isempty(offset_time) || isempty(onset_time)
+    data_subj{fn}.movement_duration(tr) = nan;
+    keyboard;
+else
+    data_subj{fn}.movement_duration(tr) = offset_time - ...
+        onset_time;
+end
+% % Just for checking; remove once check complete and port to diagnostics fn
+% plot(data_subj{fn}.x_profile_rep{tr})
+% hold on
+% plot(vel_profile_rep);
+% hold on
+% plot(sd_vec,'k')
+% hold on
+% plot(onset_ix_rep, vel_profile_rep(onset_ix_rep),'r^');
+% hold on
+% plot(offset_ix_rep ,vel_profile_rep(offset_ix_rep),'g^');
+% hold on
+% 
+% yyaxis right
+% 
+% plot(acc_profile_rep)
+% hold on 
+% plot(data_subj{fn}.pk_acc_ix_rep(tr), acc_profile_rep(...
+%     data_subj{fn}.pk_acc_ix_rep(tr)),'o');
+%  
+% hold off 
+% keyboard;
+% clf
+
+
+function plot_diagnostics(diag_no,fn, tr, vvx)
+% Function to check whether the computed values for peak velocity, harvest
+% duration and movement duration make sense
+% Diag no: 1- Pk Vel, 2- Velocity profile, 3- Harvest Duration
+global data_subj
+if nargin<1 
+    diag_no=1;
+    tr = input('Please Enter A Trial Number: ');
+end
+gcf;
+
+if diag_no==1
+    
+    plot(vvx(:,2))
+    hold on
+    plot(data_subj{fn}.pk_vel_ix(tr),data_subj{fn}.pk_vel(tr),'k^')
+    hold off
+elseif diag_no==2
+    
+    plot(data_subj{fn}.vel_profile_rep{tr});
+    hold on 
+    plot(data_subj{fn}.pk_vel_ix_rep(tr), data_subj{fn}.vel_profile_rep{...
+        tr}(data_subj{fn}.pk_vel_ix_rep(tr)),'k^');
+    hold off
+elseif diag_no==3
+    
+    plot(data_subj{fn}.vel_profile{tr});
+    hold on
+    if ~isempty(data_subj{fn}.grip_valid_ix{tr})
+    
+        plot(data_subj{fn}.grip_valid_ix{tr}, ...
+            data_subj{fn}.vel_profile{tr}(data_subj{fn}.grip_valid_ix{tr})...
+            ,'k^');
+    end
+    hold off
+    
+else
+    fprintf('the other diagnostics are under construction ... ');
+end
+keyboard
+
+function plot_diag_env(fig_ix)
+% Diagnostics at the environment level not the trial level
+
+global data_subj 
+
+if nargin < 1
+    fig_ix = 1;
+end
+clrs = {'b','r'};
+
+for i = 1:3
+    
+    for env = 1:2
+        figure(fig_ix);
+        % Correlations between movewment duration and peak velocity
+        
+        if i ==1 
+            y =  data_subj{env}.movement_duration;
+            x = data_subj{env}.pk_vel;
+            yy = 'Movement Duration';
+            xx= 'Peak Velocity';
+        elseif i ==2
+            y =  data_subj{env}.travel_duration;
+            x = data_subj{env}.pk_vel;
+            yy = 'Travel Duration';
+            xx= 'Peak Velocity';
+        else
+            y =  data_subj{env}.movement_duration;
+            x =  data_subj{env}.travel_duration;
+            yy = 'Movement Duration';
+            xx = 'Travel Duration';
+        end
+        
+        scatter(x(2:end),y(2:end), clrs{env});
+        [coeffs,S] = polyfit(x(2:end), y(2:end), 1);
+        fittedX = linspace(min(x(2:end)), max(x(2:end)), 199);
+        fittedY = polyval(coeffs, fittedX);
+        r_squared = 1 - (S.normr/norm(y(2:end) - mean(y(2:end))))^2;
+        fprintf('R squared for correlation of %s to %s - %d', yy, xx,...
+            r_squared);
+        % Plot the fitted line
+        hold on;
+        plot(fittedX, fittedY, 'r-', 'LineWidth', 3);
+        ylabel(yy);
+        xlabel(xx);
+        title ('Correlation');
+        hold on;
+    end
+    beautifyfig;
+    hold off;
+    fig_ix = fig_ix+1;
+end
+
+
+
+
+function fig_ix = plot_comparisons_env (fig_ix)
+% Plotting within subject differences in the different metrics between
+% environments
+
+global data_subj
+
+if nargin<1
+    fig_ix = 1;
+    
+end
+
+% Plot peak velocity differences 
+
+
+clrs = {'b','r'}; 
+metrics = {'pk_vel', 'harvest_duration','movement_duration',...
+    'travel_duration','force_rate_max','force_per_berry', ...
+    'patch_residence', 'max_distance'};
+m_ix = 1; % metric index
+for metric = metrics
+    
+    figure(fig_ix);
+    subplot(2,2,m_ix);
+    max_val = -10000;
+    min_val = 10000;
+    
+    for env = 1:2 % env=1 low effort; env = 2 is high effort
+        if strcmp(metric,'pk_vel')
+            plot_dat = data_subj{env}.pk_vel;
+            tt = 'Pk Velocity';
+        elseif strcmp(metric,'movement_duration')
+            plot_dat = data_subj{env}.movement_duration;
+            tt = 'Movement duration';
+        elseif strcmp(metric,'travel_duration')
+            plot_dat = data_subj{env}.travel_duration;
+            tt = 'Travel duration';
+        elseif strcmp(metric, 'max_distance')
+            plot_dat = data_subj{env}.max_distance;
+            tt = 'Max Distance';
+        elseif strcmp(metric, 'force_rate_max')
+            plot_dat = data_subj{env}.force_rate_max;
+            tt = 'Max Force Rate';
+        elseif strcmp(metric, 'force_per_berry')
+            plot_dat = data_subj{env}.force_per_berry;
+            tt= 'Integral of force';
+        elseif strcmp(metric,'harvest_duration')
+            plot_dat = data_subj{env}.harvest_duration;
+            tt = 'Harvest duration';
+        elseif strcmp(metric, 'patch_residence')
+            plot_dat = data_subj{env}.patch_residence_duration;
+            tt = 'Patch residence duration';
+        end
+        probe_indices = data_subj{env}.probe_trials;
+        plot(1:length(plot_dat), plot_dat, clrs{env});
+        hold on
+        title(tt,'Fontsize',15);
+        legend('low','high');
+        ylabel(tt);
+        xlabel('Trial #');
+        
+        if max(plot_dat) > max_val
+            max_val = max(plot_dat);
+        end
+        
+        if min(plot_dat) < min_val
+            min_val = min(plot_dat);
+        end
+
+    end
+    gcf;
+    
+    patch([probe_indices(1) probe_indices(1) probe_indices(end/4)...
+        probe_indices(end/4)] ,[min_val max_val max_val min_val] , 'r');
+    alpha(0.2)
+    patch([probe_indices(end/4+1) probe_indices(end/4+1) probe_indices(end/2)...
+        probe_indices(end/2)] ,[min_val max_val max_val min_val] , 'r');
+    alpha(0.2)
+    patch([probe_indices(end/2+1) probe_indices(end/2+1) probe_indices(end/4)+100 ...
+        probe_indices(end/4)+100] ,[min_val max_val max_val min_val] , 'r');
+    alpha(0.2)
+    patch([probe_indices(end/4+1)+100 probe_indices(end/4+1)+100 probe_indices(end) ...
+        probe_indices(end)] ,[min_val max_val max_val min_val] , 'r');
+    alpha(0.2)
+    
+    hold off;
+    beautifyfig;
+    m_ix = m_ix + 1;
+    if mod(m_ix,4) == 1
+        fig_ix = fig_ix +1;
+        m_ix = 1;
+    end
+    
+end
+
+function fig_ix = plot_mvt_traces(fig_ix)
+% Plotting the movement traces
+global data_subj;
+num_env = 2;
+num_trials = 200;
+figure(fig_ix);
+clrs = {'b--','b-.', 'r--','r-.'};
+clr_p = {'k--'};
+hAx=gobjects(2*2,1);        % preallocate for the axes handles
+
+env_tt = {'Low Eff', 'High Eff'};
+dir_tt = {'Leftward', 'Rightward'};
+
+for e = 1:num_env
+    probe_indices = data_subj{e}.probe_trials;
+
+    e0 = e-1;
+    for tr = 1:num_trials
+        tr0 = 1 - mod(tr,2);
+        m_ix = e0 * 2^1 + tr0 * 2^0 + 1;
+        hAx(m_ix) = subplot(2,2,m_ix);
+        clr = clrs{m_ix};
+        if ~isempty(find(tr==probe_indices))
+            clr = clr_p{1};
+        end
+        plot(data_subj{e}.x_profile_rep{tr}, ...
+            data_subj{e}.y_profile_rep{tr}, clr,'linewidth',1.5)
+        hold on
+        title(strcat(env_tt{e},' /',dir_tt{tr0+1}));
+    end
+    
+end
+
+gca;
+
+xlim(hAx,[-.3,.3]);
+ylim(hAx, [-.3,.3]);
+
+for m_ix = 1:4
+    gca;
+    subplot(2,2,m_ix);
+    circle(-.2,0,.03);
+    circle(.2,0,.03);
+    xlabel( 'X coordinate');
+    ylabel('Y coordinate');
+end
+
+beautifyfig;
+
+
+function h = circle(x,y,r)
+
+hold on
+th = 0:pi/50:2*pi;
+xunit = r * cos(th) + x;
+yunit = r * sin(th) + y;
+h = plot(xunit, yunit,'--');
+hold off
