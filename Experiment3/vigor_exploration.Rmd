@@ -1,0 +1,1009 @@
+---
+title: "Foraging Data"
+author: "Shruthi Sukumar"
+date: "10/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+root_dir = getwd()
+knitr::opts_chunk$set(root.dir=root_dir)
+# Load necessary libraries
+library('ggplot2')
+require('reshape2')
+require(lmerTest)
+library('lme4')
+library(sjPlot)
+library(car)
+require(multcomp)
+```
+
+## ANOVA results for vigor
+
+First, we test if there is an effect of immediate mass change on the vigor of the movement.
+
+
+```{r data_prep}
+st.err <- function(x) {
+  sd(x)/sqrt(length(x))
+}
+
+data = read.csv(file='expeirment3_data.csv')
+data$Probe <- as.factor(data$Probe)
+data$Subj_id <- as.factor(data$Subj_id)
+data$Order <- as.factor(data$Order)
+
+data$harvest_scale = data$harvest_duration/1000
+data$pr_scale = data$patch_residence_duration/1000
+data$travel_scale = data$travel_duration/1000
+data$movement_scale = data$movement_duration/1000
+# determine difference in peak velocity between environments (Low minus High effort)
+# Verified that this operation is the same as doing difference by subjects
+data$pv_diff = data$pk_vel[data$Env ==0] - data$pk_vel[data$Env==1]
+data$hs_diff = data$harvest_scale[data$Env == 1] - data$harvest_scale[data$Env==0]
+data$td_diff = data$travel_duration[data$Env==0] - data$travel_duration[data$Env==1]
+data$ts_diff = data$travel_scale[data$Env==0] - data$travel_scale[data$Env==1]
+data$md_diff = data$movement_duration[data$Env==0] - data$movement_duration[data$Env==1]
+
+data$block_no = numeric(nrow(data))
+data$probe_blockno = numeric(nrow(data))
+data$grip_reqd = numeric(nrow(data))
+data$tot_harvest_1010 = numeric(nrow(data))
+
+subj_arr = unique(data$Subj_id)
+
+# create block number variable to label every consecutive block of 50trials 
+# Also impute missing values to avoid issues while running ANOVA
+
+for (s in subj_arr) {
+  
+  data$tot_harvest_1010[data$Subj_id==s] = data$grip_ramp_up_dur[data$Subj_id==s] + data$harvest_duration[data$Subj_id==s] + data$grip_drop_time[data$Subj_id == s] + data$grip_release_time[data$Subj_id==s]
+  
+  for (e in 0:1){
+
+    hrt_vec = data$harvest_reaction_time[data$Subj_id==s & data$Env==e]
+    frm_vec = data$force_rate_max[data$Subj_id==s & data$Env==e]
+    gru_vec = data$grip_ramp_up_dur[data$Subj_id==s & data$Env==e]
+    gut_vec = data$gut_norm[data$Subj_id==s & data$Env==e]
+    thd_vec = data$tot_harvest_1010[data$Subj_id==s & data$Env == e]
+
+    hrt_avg = mean(hrt_vec,na.rm=TRUE)
+    frm_avg = mean(frm_vec,na.rm=TRUE)
+    gru_avg = mean(gru_vec,na.rm=TRUE)
+    gut_avg = mean(gut_vec, na.rm=TRUE)
+    thd_avg = mean(thd_vec, na.rm=TRUE)
+
+    nan_idx_hrt = is.nan(data$harvest_reaction_time[data$Subj_id==s & data$Env==e])
+    nan_idx_frm = is.nan(data$force_rate_max[data$Subj_id==s & data$Env==e])
+    nan_idx_gru = is.nan(data$grip_ramp_up_dur[data$Subj_id==s & data$Env==e])
+    nan_idx_gut = is.nan(data$gut_norm[data$Subj_id==s & data$Env==e])
+    nan_idx_thd = is.nan(data$thd_norm[data$Subj_id==s & data$Env==e])
+
+    hrt_vec[nan_idx_hrt] = hrt_avg
+    frm_vec[nan_idx_frm] = frm_avg
+    gru_vec[nan_idx_gru] = gru_avg
+    gut_vec[nan_idx_gru] = gut_avg
+    thd_vec[nan_idx_thd] = thd_avg
+
+    data$harvest_reaction_time[data$Subj_id==s & data$Env==e] = hrt_vec
+    data$force_rate_max[data$Subj_id==s & data$Env==e] = frm_vec
+    data$grip_ramp_up_dur[data$Subj_id==s & data$Env==e] = gru_vec
+    data$gut_norm[data$Subj_id==s & data$Env==e] = gut_vec
+    data$tot_harvest_1010[data$Subj_id==s & data$Env==e] = thd_vec
+    
+    block_no  = data$block_no[data$Subj_id==s & data$Env==e]
+    block_no[1:50] = 0
+    block_no[51:100] = 1
+    block_no[101:150] = 2
+    block_no[151:200] = 3
+    data$block_no[data$Subj_id==s & data$Env==e] = block_no
+    data$probe_trialno[data$Probe==1 & data$Subj_id==s & data$Env == e] = seq(1,40,1)
+    
+  }
+  
+  # create the diff variables to determine 
+  data$hs_diff[data$Subj_id ==s] = data$harvest_scale[data$Env==0 & data$Subj_id==s]-
+    data$harvest_scale[data$Env==1& data$Subj_id==s]
+  data$ps_diff[data$Subj_id ==s] = data$pr_scale[data$Env==0 & data$Subj_id==s]-
+    data$pr_scale[data$Env==1& data$Subj_id==s]
+  data$pk_norm_avg[data$Subj_id==s] =
+    data$pk_vel[data$Subj_id==s]/mean(data$pk_vel[data$Subj_id==s],na.rm=TRUE) 
+  data$travel_norm_avg[data$Subj_id==s] = data$travel_scale[data$Subj_id==s]/
+    mean(data$travel_scale[data$Subj_id==s],na.rm=TRUE) 
+  data$pk_norm_avg[data$Subj_id==s] = data$pk_vel[data$Subj_id==s]/ mean(data$pk_vel[data$Subj_id==s], na.rm=TRUE) 
+  data$travel_norm_avg[data$Subj_id==s] = data$travel_scale[data$Subj_id==s]/mean(data$travel_scale[data$Subj_id==s], na.rm=TRUE)
+  data$frm_norm_avg[data$Subj_id==s] = data$force_rate_max[data$Subj_id==s]/ mean(data$force_rate_max[data$Subj_id==s],na.rm=TRUE) 
+  data$gru_norm_avg[data$Subj_id==s] = data$grip_ramp_up_dur[data$Subj_id==s]/
+    mean(data$grip_ramp_up_dur[data$Subj_id==s],na.tm=TRUE)
+  
+  
+}
+
+data$mass[data$Env==0] = 0
+data$mass[data$Env==1] = 3.5
+data$mass[data$Probe==1]=2
+
+data$trial_scale = data$Trial/200
+data$Order = as.factor(data$Order)
+data$berry_per_har = data$berries/data$tot_harvest_1010
+data$probe_block_order = numeric(nrow(data))
+
+for ( o in 0:1){
+  data$probe_block_order[data$Order == 0] = (as.numeric(as.character(data$Env[data$Order == 0] )))*4 + data$block_no[data$Order == 0]
+  data$probe_block_order[data$Order == 1] = (as.numeric(as.character(data$Order[data$Order == 1])) - as.numeric(as.character(data$Env[data$Order == 1] )) )*4 + data$block_no[data$Order == 1]
+  
+}
+
+```
+
+## Immediate mass within an environment increases vigor?
+
+First we are going to run a 2-way repeated measures ANOVA with factors being a binary variable indicating environment type and the second factor being the mass associated with the trial. An interaction between the two terms is also added. 
+
+```{r anova1, echo=FALSE}
+
+data$Env = as.factor(data$Env)
+data$Probe = as.factor(data$Probe)
+# data$block_no = as.factor(data$block_no)
+
+aov_agg = aggregate(data=data, cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2, tot_harvest_1010, gut_norm) ~ Subj_id+Env+Probe+block_no+Order, mean )
+nrow(aov_agg)
+pv_agg.aov =  aov(pk_vel~Env*Probe + Order + Error(Subj_id), data = aov_agg)
+
+# pv_agg.aov <-with(data=aov_agg , pv_agg.mdl)
+summary(pv_agg.aov)
+
+pv_agg.aov
+
+```
+
+## Individual responses to environment effort
+
+```{r pv_dif, echo=FALSE}
+
+a_dif = aggregate(cbind(ts_diff,pv_diff)~Probe+Env+Subj_id, data=data, mean)
+b_dif = aggregate(cbind(ts_diff,pv_diff)~Probe+Env+Subj_id, data=data, st.err)
+c_dif = cbind.data.frame(a_dif$Subj_id, a_dif$Env, a_dif$Probe, a_dif$pv_diff, a_dif$ts_diff, 
+              a_dif$pv_diff-b_dif$pv_diff, a_dif$pv_diff + b_dif$pv_diff,
+              a_dif$ts_diff-b_dif$ts_diff, a_dif$ts_diff + b_dif$ts_diff)
+
+colnames(c_dif) <- c("Subj","Env","Probe","pv_diff","ts_diff","ymin_pd","ymax_pd","ymin_ts","ymax_ts")
+c_dif <- as.data.frame(c_dif)
+c_dif <- c_dif[c_dif$Probe==1 & c_dif$Env==1,]
+head(c_dif)
+
+subj_neg_arr = c_dif$Subj[c_dif$pv_diff < 0]
+print(subj_neg_arr)
+ 
+
+```
+
+
+
+
+## Effect of environment history on probe trials
+
+Probe trials have an intermediate mass (m=2kg) which maybe higher or lower than the surrounding general environment trials depending on the environment. Here, we push our focus to just the probe trials and see the effect of environment, as well as the trial block number (0-3, each containing 50 trials). 
+
+```{r anova2 , echo=FALSE}
+prb_dat = data[data$Probe==1,]
+#prb_dat$probe_trialno = as.factor(prb_dat$probe_trialno)
+aov_agg2_tr = aggregate(data= prb_dat, pk_vel ~Subj_id + Env + probe_trialno, mean )
+# pv_prb_agg.mdl =
+pv_prb_agg.aov <- with(data=aov_agg2_tr,  aov(pk_vel~ Env+probe_trialno + Error(Subj_id)))
+
+summary(pv_prb_agg.aov)
+
+```
+```{r}
+prb_dat_dif = data[data$Probe==1,]
+#prb_dat_dif$probe_trialno = as.factor(prb_dat_dif$probe_trialno)
+prb_dat_dif = prb_dat_dif[prb_dat_dif$Env==0,]
+aov_agg2_tr = aggregate(data= prb_dat_dif, pv_diff ~Subj_id + probe_trialno, mean )
+# pv_prb_agg.mdl =
+pv_prb_dif.aov <- with(data=aov_agg2_tr,  aov(pv_diff~ probe_trialno + Error(Subj_id)))
+
+summary(pv_prb_dif.aov)
+```
+
+```{r anova2 , echo=FALSE}
+prb_dat = data[data$Probe==1,]
+# prb_dat$probe_trialno = as.factor(prb_dat$probe_trialno)
+aov_agg2 = aggregate(data= prb_dat, cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2, tot_harvest_1010, gut_norm) ~Subj_id + Env + Probe + block_no, mean )
+# pv_prb_agg.mdl =
+pv_prb_agg.aov <- with(data=aov_agg2,  aov(pk_vel~ Env+block_no + Error(Subj_id)))
+
+summary(pv_prb_agg.aov)
+
+```
+
+## Travel Duration effects with ANOVA
+
+Redo the analyses for travel duration with 2 way repeated measures ANOVA
+
+```{r travel_scale, echo=FALSE}
+
+td_agg.aov = with(data=aov_agg, aov(travel_scale~Env*Probe +Error(Subj_id)))
+summary(td_agg.aov)
+
+aov_agg2 = aggregate(data= prb_dat, travel_scale ~Subj_id + Env + probe_trialno, mean )
+
+td_prb_agg.aov = with(data=aov_agg2, aov(travel_scale~Env +  probe_trialno +Error(Subj_id)))
+summary(td_prb_agg.aov)
+
+td_prb_agg.aov$coefficients
+
+```
+
+## ANOVA(lmer) method
+
+You still need to aggregate here.
+
+```{r anova_method2}
+eq_pv = pk_vel~ Env*Probe+ block_no + (1|Subj_id)
+mdl_pv = lmer(eq_pv, data=aov_agg)
+# summary(mdl_pv)
+anova(mdl_pv)
+
+
+
+```
+
+
+
+
+## Harvest Behaviour stats
+
+When subjects enter a patch, they have to decide when to start gripping, and then how fast to ramp up their grip force to reach the required threshold.
+
+First we focus on harvest reaction time - the time it takes the subject to start gripping their grip force/ 
+
+```{r anova_hrt }
+
+hrt_agg.aov =  aov(harvest_reaction_time~Env*Probe + Error(Subj_id), data = aov_agg)
+summary(hrt_agg.aov)
+
+hrt_agg.proj <- proj(hrt_agg.aov)
+hrt_agg.res <- hrt_agg.proj[['Within']][,'Residuals']
+qqnorm(hrt_agg.res)
+qqline(hrt_agg.res)
+
+```
+
+There appears to be no modulation of actual harvest reaction time. 
+
+Let us now look at how fast subjects choose to ramp up their grip force to the threshold. There are two metrics of duration we look at. One is the duration subjects spend between 10N and 30N during ramp up. Let us look at the effect of environment effort on this metric. 
+```{r anova_grip_ramp, echo= FALSE}
+
+grip_ramp_up.aov =  aov(grip_ramp_up_dur ~Env*Probe + block_no +Order + Error(Subj_id), data = aov_agg)
+summary(grip_ramp_up.aov)
+
+gru_agg.proj <- proj(grip_ramp_up.aov)
+gru_agg.res <- gru_agg.proj[['Within']][,'Residuals']
+qqnorm(gru_agg.res)
+qqline(gru_agg.res)
+
+
+```
+There is a mild interaction effect between environment and probe trials. Let us focus on the probe trials and see what the effect of environment 
+
+```{r anova_prb}
+
+aov_agg2 = aggregate(data= prb_dat, cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2, tot_harvest_1010) ~Subj_id + Env + Probe + block_no, mean )
+gru_prb_agg.aov <- with(data=aov_agg2,  aov( grip_ramp_up_dur ~ Env+block_no + Error(Subj_id)))
+
+summary(gru_prb_agg.aov)
+# prb_dat$probe_trialno = as.factor(prb_dat$probe_trialno)
+
+aov_agg2_tr = aggregate(data= prb_dat,cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2, tot_harvest_1010)  ~Subj_id + Env + probe_trialno, mean )
+# pv_prb_agg.mdl =
+gru_prb_agg2.aov <- with(data=aov_agg2_tr,  aov(grip_ramp_up_dur~ Env+probe_trialno +  Error(Subj_id)))
+
+summary(gru_prb_agg2.aov)
+
+```
+
+
+
+Let's look at the change in environment per block for each of these variables 
+
+```{r prb_gru}
+agg_subj = aggregate(data=aov_agg2, cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2, tot_harvest_1010) ~ Env , mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=aov_agg2, cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2,tot_harvest_1010) ~ Env , st.err )
+varlist = c('pk_vel', 'travel_scale','harvest_reaction_time', 'grip_ramp_up_dur', 'force_rate_max', 'grip_ramp_up2','tot_harvest_1010')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+head(agg_subj)
+ggplot(data=agg_subj)+geom_line(aes(x=Env, y=grip_ramp_up_dur, group = 1))+
+  geom_errorbar(aes(x=Env, ymin=grip_ramp_up_dur_min,ymax=grip_ramp_up_dur_max), width = 0.001)
+
+```
+
+Further, looking at an alternative metric for grip ramp up duration where we calculate the time from when their rate of grip force begins to rise so as to indicate beginning of ramp up up until the point at which they reach the threshold of 30 N
+
+```{r anova gru_2}
+
+grip_ramp_up2.aov =  aov(grip_ramp_up2 ~Env*Probe + block_no + Error(Subj_id), data = aov_agg)
+summary(grip_ramp_up2.aov)
+
+gru_agg2.proj <- proj(grip_ramp_up2.aov)
+gru_agg2.res <- gru_agg2.proj[['Within']][,'Residuals']
+qqnorm(gru_agg2.res)
+qqline(gru_agg2.res)
+
+
+
+
+```
+
+```{r, creat_df_all}
+agg_subj = aggregate(data=aov_agg, cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2) ~ Env + block_no, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=aov_agg, cbind(pk_vel, travel_scale, harvest_reaction_time, grip_ramp_up_dur, force_rate_max, grip_ramp_up2) ~ Env + block_no, st.err )
+varlist = c('pk_vel', 'travel_scale','harvest_reaction_time', 'grip_ramp_up_dur', 'force_rate_max', 'grip_ramp_up2')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+head(agg_subj)
+grip_ramp_up2.aov =  aov(grip_ramp_up2 ~Env*Probe + block_no + Error(Subj_id), data = aov_agg)
+summary(grip_ramp_up2.aov)
+
+gru_agg2.proj <- proj(grip_ramp_up2.aov)
+gru_agg2.res <- gru_agg2.proj[['Within']][,'Residuals']
+qqnorm(gru_agg2.res)
+qqline(gru_agg2.res)
+
+
+
+```
+
+Finally let us look at the effects on peak force rate of the environment. For this let us run our usual ANOVA.
+
+```{r anova_pfr}
+
+print('All Trials')
+frm.aov =  aov( force_rate_max ~Env*Probe +block_no+ Error(Subj_id), data = aov_agg)
+summary(frm.aov)
+
+frm.proj <- proj(frm.aov)
+frm.res <- frm.proj[['Within']][,'Residuals']
+qqnorm(frm.res)
+qqline(frm.res)
+
+```
+
+
+```{r}
+frm_prb.aov <- with(data=aov_agg2,  aov(force_rate_max~ Env+block_no+ Error(Subj_id)))
+
+summary(frm_prb.aov)
+
+
+
+frm_prb_agg2.aov <- with(data=aov_agg2_tr,  aov(force_rate_max~ Env+probe_trialno+ Error(Subj_id)))
+
+summary(frm_prb_agg2.aov)
+```
+
+
+Let us look at the visualization of peak force rate 
+
+```{r anova_r}
+
+agg_subj = aggregate(data=aov_agg2, force_rate_max ~ Env, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=aov_agg2, force_rate_max ~ Env , st.err )
+varlist = c('force_rate_max')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+head(agg_subj)
+
+ggplot(data=agg_subj)+geom_line(aes(x=Env, y=force_rate_max, group = 1))+
+  geom_errorbar(aes(x=Env, ymin=force_rate_max_min,ymax=force_rate_max_max), width = 0.001)+xlab("Environment Effort") + ylab("Peak Force Rate")
+  th
+
+```
+
+```{r}
+a_har = aggregate(data=data,cbind(gru_norm_avg, frm_norm_avg) ~Env  +Subj_id, mean)
+cname_har = colnames(a_har)
+b_har = aggregate(data=data, cbind(gru_norm_avg, frm_norm_avg) ~Env+Subj_id , st.err)
+c_har = cbind(a_har, a_har$gru_norm_avg - b_har$gru_norm_avg, a_har$gru_norm_avg + b_har$gru_norm_avg,
+              a_har$frm_norm_avg - b_har$frm_norm_avg, a_har$frm_norm_avg + b_har$frm_norm_avg )
+colnames(c_har) <-c(cname_har, 'gru_min','gru_max','frm_min','frm_max')
+c_har$Env = as.character(c_har$Env)
+
+a_har1 = aggregate(data=c_har,cbind(gru_norm_avg, frm_norm_avg) ~Env , mean)
+cname_har1 = colnames(a_har1)
+b_har1 = aggregate(data=c_har, cbind(gru_norm_avg, frm_norm_avg) ~Env  , st.err)
+c_har1 = cbind(a_har1, a_har1$gru_norm_avg- b_har1$gru_norm_avg, a_har1$gru_norm_avg + b_har1$gru_norm_avg,
+               a_har1$frm_norm_avg- b_har1$frm_norm_avg, a_har1$frm_norm_avg + b_har1$frm_norm_avg )
+colnames(c_har1) <-c(cname_har1, 'gru_min','gru_max','frm_min','frm_max')
+c_har1$Env = as.character(c_har1$Env)
+# d = file.path(getwd(),'Research','foraging_project')
+p_gru<-ggplot(data= c_har1)+ geom_line(aes(x= Env, y= gru_norm_avg, group=1), size=1.1)+
+  geom_errorbar(aes(x=Env, ymin = gru_min, ymax = gru_max), size=1.1, width = 0)+
+  theme_classic()+
+  xlab('Environment Effort')+ylab('Grip Ramp Up Duration (norm)')+
+  scale_x_discrete(labels=c("0"="Low Effort","1"="High Effort"))+th
+fn = file.path('plots','gru_norm_Env_line.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_gru , device="pdf", width=4, height =6 )
+
+
+ p_frm<- ggplot(data= c_har1)+ geom_line(aes(x= Env, y= frm_norm_avg, group=1), size=1.1)+
+  geom_errorbar(aes(x=Env, ymin = frm_min, ymax = frm_max), size=1.1, width = 0)+
+  theme_classic()+
+  xlab('Environment Effort')+ylab('Peak Force Rate (norm)')+
+  scale_x_discrete(labels=c("0"="Low Effort","1"="High Effort"))+th
+fn = file.path('plots','Frm_norm_Env_line.pdf',fsep='/' )
+ggsave(filename=fn,plot = p_frm , device="pdf", width=4, height =6 )
+```
+
+
+
+Finally, let's look at the correlation between the different duration metrics of grip ramp up and harvest reaction and the peak force rate. Ideally grip_ramp_up_durations will correlate with force_rate_max. 
+
+```{r corr_frm}
+
+ggplot(data= aov_agg)+geom_point(aes(x= force_rate_max, y = grip_ramp_up_dur, color=Env))+
+  geom_smooth(aes(x= force_rate_max, y = grip_ramp_up_dur),method="loess")+
+  ggtitle('Force Threshold Grip Ramp Up')+theme_classic()
+# +
+#   geom_errorbar(aes(x=force_rate_max, ymin=grip_ramp_up_dur_min,ymax=grip_ramp_up_dur_max, color = Env), width = 0.001)+
+#    geom_errorbarh(aes(y=grip_ramp_up_dur, xmin=force_rate_max_min,xmax=force_rate_max_max, color = Env), width = 0.001)+theme_classic()
+
+
+```
+```{r, corr2}
+
+ggplot(data= aov_agg)+geom_point(aes(x= force_rate_max, y = grip_ramp_up2, color=Env))+
+  geom_smooth(aes(x= force_rate_max, y = grip_ramp_up2),method="loess")+
+  ggtitle('Force Threshold Grip Ramp Up')+theme_classic()
+
+```
+
+Finally we look at the correlation between harvest reaction time and peak force rate. 
+
+```{r corr_hrt_frm}
+
+ggplot(data= aov_agg)+geom_point(aes(x= force_rate_max, y = harvest_reaction_time , color=Env))+
+  geom_smooth(aes(x= force_rate_max, y = harvest_reaction_time),method="loess")+
+  ggtitle('Force Threshold Grip Ramp Up')+theme_classic()
+
+
+```
+
+## Normalized Giving up duration 
+
+
+```{r}
+
+aov_agg = aggregate(data=data, gut_norm ~ Subj_id+Env+Probe+block_no, mean )
+
+gn.aov =  aov( gut_norm ~Env*Probe + block_no+ Error(Subj_id), data = aov_agg)
+summary(gn.aov)
+
+gn.proj <- proj(gn.aov)
+gn.res <- gn.proj[['Within']][,'Residuals']
+qqnorm(gn.res)
+qqline(gn.res)
+
+
+
+```
+
+
+## Total Harvest duration
+
+Time taken from crossing 10 N to coming back to 10 N (Reza's revisions)
+
+```{r}
+aov_agg = aggregate(data=data, tot_harvest_1010 ~ Subj_id+Env+Probe+block_no, mean )
+
+gn.aov =  aov( tot_harvest_1010 ~Env*Probe + block_no+ Error(Subj_id), data = aov_agg)
+summary(gn.aov)
+
+gn.proj <- proj(gn.aov)
+gn.res <- gn.proj[['Within']][,'Residuals']
+qqnorm(gn.res)
+qqline(gn.res)
+
+
+
+aov_agg2_tr = aggregate(data= prb_dat,tot_harvest_1010 ~Subj_id + Env + probe_trialno, mean )
+gut_prb_agg2.aov <- with(data=aov_agg2_tr,  aov(tot_harvest_1010~ Env+probe_trialno+ Error(Subj_id)))
+
+summary(gut_prb_agg2.aov)
+# 
+# ggplot(data=agg_subj)+geom_line(aes(x=Env, y=tot_harvest_1010, group = 1))+
+#   geom_errorbar(aes(x=Env, ymin=tot_harvest_1010_min,ymax=tot_harvest_1010_max), width = 0.001)
+```
+
+```{r}
+agg_subj = aggregate(data=aov_agg,  tot_harvest_1010 ~ Env, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=aov_agg, tot_harvest_1010 ~ Env , st.err )
+varlist = c('tot_harvest_1010')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+
+ggplot(data=agg_subj)+geom_line(aes(x=Env, y=tot_harvest_1010, group = 1))+
+  geom_errorbar(aes(x=Env, ymin=tot_harvest_1010_min,ymax=tot_harvest_1010_max), width = 0.001)+xlab("Environment Effort") + ylab("Total Harvest (10N - 10N)")
+  th
+
+
+```
+
+
+## visualizing giving up time
+
+```{r}
+
+agg_subj = aggregate(data=aov_agg, tot_harvest_1010 ~ Env +Subj_id, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=aov_agg,tot_harvest_1010 ~ Env+Subj_id,st.err )
+varlist = c('tot_harvest_1010')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+ggplot(data=agg_subj)+geom_line(aes(x=Env, y= tot_harvest_1010, group=1))+
+  geom_errorbar(aes(x= Env, ymin = tot_harvest_1010_min, ymax = tot_harvest_1010_max),
+                width=0)+
+  facet_wrap(~Subj_id, scales="free")+
+  xlab('Environment Effort')+ ylab('Total Harvest Duration')
+
+# +
+#   geom_errorbar(aes(x=Env, ymin=gut_norm_min,ymax=force_rate_max_max), width = 0.001)
+
+
+```
+
+## Berries per harvest period 
+
+```{r}
+aov_agg = aggregate(data=data, berry_per_har ~ Subj_id+Env+Probe+block_no, mean )
+
+gn.aov =  aov( berry_per_har ~Env*Probe + block_no+ Error(Subj_id), data = aov_agg)
+summary(gn.aov)
+
+gn.proj <- proj(gn.aov)
+gn.res <- gn.proj[['Within']][,'Residuals']
+qqnorm(gn.res)
+qqline(gn.res)
+
+
+
+aov_agg2_tr = aggregate(data= prb_dat, berry_per_har ~Subj_id + Env + probe_trialno, mean )
+gut_prb_agg2.aov <- with(data=aov_agg2_tr,  aov(berry_per_har ~ Env+probe_trialno+ Error(Subj_id)))
+
+summary(gut_prb_agg2.aov)
+```
+
+Visulaizing berries per harvest period. What do we expect? 
+
+```{r}
+agg_subj = aggregate(data=aov_agg,  berry_per_har ~ Env, mean )
+cnames = colnames(agg_subj)
+agg_sd_subj = aggregate(data=aov_agg, berry_per_har ~ Env , st.err )
+varlist = c('berry_per_har')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_subj = cbind.data.frame(agg_subj, agg_subj[v] - agg_sd_subj[v], agg_subj[v] + agg_sd_subj[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_subj) <- cnames
+
+
+ggplot(data=agg_subj)+geom_line(aes(x=Env, y=berry_per_har, group = 1))+
+  geom_errorbar(aes(x=Env, ymin=berry_per_har_min,ymax=berry_per_har_max), width = 0.001)+xlab("Environment Effort") + ylab("Berry Rate")
+  th
+```
+
+
+## Wihtin trial correlation of grip ramp up and ramp down durations : 
+
+```{r}
+
+lm_eqn <- function(df){
+    m <- lm(gut_norm ~ grip_ramp_up_dur, df);
+    eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+         list(a = format(unname(coef(m)[1]), digits = 2),
+              b = format(unname(coef(m)[2]), digits = 2),
+             r2 = format(summary(m)$r.squared, digits = 3)))
+    as.character(as.expression(eq));
+}
+ 
+ggplot(data= data)+geom_point(aes(x= grip_ramp_up_dur, y = gut_norm, color=Env))+
+  geom_smooth(aes(x= grip_ramp_up_dur, y = gut_norm),method="lm")+
+  geom_text(x = 1000, y= 6, label=lm_eqn(data), parse=TRUE)+
+  # facet_wrap(~Subj_id, scales="free")+ 
+  ggtitle('Force Threshold Grip Ramp Up')+theme_classic()
+```
+
+Berries stats
+
+```{r}
+
+g_ber = glmer(berries ~ Env*Probe +block_no + (1|Subj_id), data=data, family = poisson(link="log"))
+plot_model(g_ber, type = "diag")
+plot_model(g_ber, type="pred")
+plot_model(g_ber, type="int")
+
+summary(g_ber)
+
+
+```
+
+## Checking pure time effect for all harvest variables.
+
+```{r}
+
+htime_agg1_subj =  aggregate(data=data, cbind(force_rate_max, grip_ramp_up_dur, tot_harvest_1010, gut_norm)~probe_block_order+Subj_id, mean)
+htime_agg1 = aggregate(data=data, cbind(force_rate_max, grip_ramp_up_dur, tot_harvest_1010, gut_norm) ~probe_block_order, mean)
+cnames = colnames(htime_agg1)
+htime_err1 = aggregate(data=data, cbind(force_rate_max, grip_ramp_up_dur, tot_harvest_1010, gut_norm) ~ probe_block_order, st.err)
+varlist = c('force_rate_max', 'grip_ramp_up_dur', 'tot_harvest_1010', 'gut_norm')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  htime_agg1 = cbind.data.frame(htime_agg1, htime_agg1[v] - htime_err1[v], htime_agg1[v] + htime_err1[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(htime_agg1) <- cnames
+
+p_time <- ggplot(data=htime_agg1)+geom_line(aes(x= probe_block_order, y= tot_harvest_1010), size=1.3)+
+  geom_errorbar(aes(x= probe_block_order, ymin=tot_harvest_1010_min, ymax=  tot_harvest_1010_max),size=1.4,width=0.05)+
+  theme_classic()+
+  # facet_wrap(~Order, labeller = order_labels)+
+  xlab('Temporal Block Number')+ylab('Total Harvest Duration')+
+  scale_x_continuous(breaks =  seq(0,7,1))+
+  theme(text=element_text( face="bold", size=20),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b =25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+p_time 
+# + geom_hline(yintercept =0.0, linetype = "dashed")
+```
+Now let's see if this exists for other metrics as well.
+
+```{r}
+p_gut_time <- ggplot(data=htime_agg1)+geom_line(aes(x= probe_block_order, y= gut_norm), size=1.3)+
+  geom_errorbar(aes(x= probe_block_order, ymin=gut_norm_min, ymax=  gut_norm_max),size=1.4,width=0.05)+
+  theme_classic()+
+  # facet_wrap(~Order, labeller = order_labels)+
+  xlab('Temporal Block Number')+ylab('Total Harvest Duration')+
+  scale_x_continuous(breaks =  seq(0,7,1))+
+  theme(text=element_text( face="bold", size=20),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b =25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+p_gut_time
+
+# p_gut_time + geom_line(data= htime_agg1_subj,aes(x=probe_block_order, y= gut_norm, group=factor(Subj_id) ), alpha=0.2)
+```
+Force rate max
+
+```{r}
+p_frm <- ggplot(data=htime_agg1)+geom_line(aes(x= probe_block_order, y= force_rate_max), size=1.3)+
+  geom_errorbar(aes(x= probe_block_order, ymin=force_rate_max_min, ymax=  force_rate_max_max),size=1.4,width=0.05)+
+  theme_classic()+
+  # facet_wrap(~Order, labeller = order_labels)+
+  xlab('Temporal Block Number')+ylab('Peak Force Rate')+
+  scale_x_continuous(breaks =  seq(0,7,1))+
+  theme(text=element_text( face="bold", size=20),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b =25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+p_frm
+# p_frm + geom_line(data= htime_agg1_subj,aes(x=probe_block_order, y= force_rate_max, group=factor(Subj_id) ), alpha=0.2)
+```
+Grip Ramp Up Duration 
+```{r}
+p_frm <- ggplot(data=htime_agg1)+geom_line(aes(x= probe_block_order, y= grip_ramp_up_dur), size=1.3)+
+  geom_errorbar(aes(x= probe_block_order, ymin=grip_ramp_up_dur_min, ymax=  grip_ramp_up_dur_max),size=1.4,width=0.05)+
+  theme_classic()+
+  # facet_wrap(~Order, labeller = order_labels)+
+  xlab('Temporal Block Number')+ylab('Peak Force Rate')+
+  scale_x_continuous(breaks =  seq(0,7,1))+
+  theme(text=element_text( face="bold", size=20),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b =25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+p_frm
+```
+## Peak force rate v/s peak velocity 
+
+```{r}
+htime_agg1 = aggregate(data=data,  cbind(force_rate_max, pk_vel,tot_harvest_1010) ~Env+Probe+Order , mean)
+cnames = colnames(htime_agg1)
+htime_err1 = aggregate(data=data,  cbind(force_rate_max, pk_vel, tot_harvest_1010) ~  Env+Probe+Order  , st.err)
+htime_agg1 = cbind(htime_agg1, htime_agg1$force_rate_max- htime_err1$force_rate_max, 
+                  htime_agg1$force_rate_max + htime_err1$force_rate_max,
+                   htime_agg1$pk_vel- htime_err1$pk_vel, 
+                  htime_agg1$pk_vel + htime_err1$pk_vel,
+                  htime_agg1$tot_harvest_1010- htime_err1$tot_harvest_1010, 
+                  htime_agg1$tot_harvest_1010 + htime_err1$tot_harvest_1010)
+colnames(htime_agg1) <-c(cnames, 'frm_min','frm_max','pv_min','pv_max','th_min','th_max')
+
+env_labels=as_labeller(c(`0`='Low Effort',`1`='High Effort' ))
+ord_labels = as_labeller(c(`0`="Low First", `1`="High First"))
+
+ggplot(data= htime_agg1)+ geom_point(aes(x=pk_vel, y=  force_rate_max, color= factor(Env),
+                                        shape = factor(Probe)),size = 5)+
+  geom_errorbar(aes(x=pk_vel, ymin = frm_min, ymax = frm_max, color=factor(Env)), size=1., width = 0.0)+
+  theme_classic()+
+  xlab('Pk_vel')+ylab( 'Pk force rate')+
+  # scale_x_discrete(labels=c(`0`="Environment",`1`="Probe" ))+
+  facet_wrap(Order~.,labeller = ord_labels, scales ="free")+
+  theme(text=element_text( face="bold", size=20),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b =25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+Harvest duration v/s peak velocity
+
+```{r}
+ggplot(data= htime_agg1)+ geom_point(aes(x=pk_vel, y= tot_harvest_1010, color= factor(Env),
+                                        shape = factor(Probe)),size = 5)+
+  geom_errorbar(aes(x=pk_vel, ymin = th_min, ymax = th_max, color=factor(Env)), size=1., width = 0.0)+
+  theme_classic()+
+  xlab('Pk_vel')+ylab( 'Total Harvest Duration')+
+  # scale_x_discrete(labels=c(`0`="Environment",`1`="Probe" ))+
+  facet_wrap(Order~.,labeller = ord_labels, scales ="free")+
+  theme(text=element_text( face="bold", size=20),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b =25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+## Ignoring order effects 
+
+```{r}
+htime_agg1 = aggregate(data=data,  cbind(force_rate_max, pk_vel,tot_harvest_1010) ~Env+Probe+mass , mean)
+cnames = colnames(htime_agg1)
+htime_err1 = aggregate(data=data,  cbind(force_rate_max, pk_vel, tot_harvest_1010) ~  Env+Probe+mass  , st.err)
+htime_agg1 = cbind(htime_agg1, htime_agg1$force_rate_max- htime_err1$force_rate_max, 
+                  htime_agg1$force_rate_max + htime_err1$force_rate_max,
+                   htime_agg1$pk_vel- htime_err1$pk_vel, 
+                  htime_agg1$pk_vel + htime_err1$pk_vel,
+                  htime_agg1$tot_harvest_1010- htime_err1$tot_harvest_1010, 
+                  htime_agg1$tot_harvest_1010 + htime_err1$tot_harvest_1010)
+colnames(htime_agg1) <-c(cnames, 'frm_min','frm_max','pv_min','pv_max','th_min','th_max')
+
+env_labels=as_labeller(c(`0`='Low Effort',`1`='High Effort' ))
+ord_labels = as_labeller(c(`0`="Low First", `1`="High First"))
+
+ggplot(data= htime_agg1)+ geom_point(aes(x=pk_vel, y=  force_rate_max, color= factor(Env),
+                                        shape = factor(mass)),size = 5)+
+  geom_errorbar(aes(x=pk_vel, ymin = frm_min, ymax = frm_max, color=factor(Env)), size=1., width = 0.0)+
+  theme_classic()+
+  xlab('Pk_vel')+ylab( 'Pk force rate')+
+  # scale_x_discrete(labels=c(`0`="Environment",`1`="Probe" ))+
+  #facet_wrap(Order~.,labeller = ord_labels, scales ="free")+
+  theme(text=element_text( face="bold", size=20),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b =25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+```
+# Looking at ramp-up and ramp down in the probe-env transition trials along
+
+## First - transition from environment to probe (beginning of probe period)
+
+```{r}
+
+trials_cons = c(20, 21, 70, 71, 120, 121, 170, 171)
+
+data_less_trials <- data[data$Trial %in% trials_cons, ]
+
+agg_all = aggregate(data=data_less_trials, cbind(grip_ramp_up_dur, grip_release_time) ~ Env +Probe  , mean )
+
+cnames = colnames(agg_all)
+agg_sd_all = aggregate(data=data_less_trials, cbind(grip_ramp_up_dur, grip_release_time) ~ Env  +Probe  , st.err )
+
+
+
+varlist = c('grip_ramp_up_dur', 'grip_release_time')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_all = cbind.data.frame(agg_all, agg_all[v] - agg_sd_all[v], agg_all[v] + agg_sd_all[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_all) <- cnames
+
+th <- theme(text=element_text( face="bold", size=15),
+        axis.title.y= element_text(margin = margin(t = 0, r = 25, b = 0, l = 10)),
+        axis.title.x= element_text(margin = margin(t = 25, r = 0, b = 10, l = 0)),
+        plot.title = element_text(size=40, hjust=0.5,face="bold", margin = margin(t = 10, r = 0, b = 25, l = 0)),
+        axis.line.x = element_line(color="black", size = 0.75),
+        axis.line.y = element_line(color="black", size = 0.75),
+       # legend.position = "none",
+        strip.text.x = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+agg_all$Probe <- as.factor(agg_all$Probe)
+
+ggplot(data=agg_all)+geom_line(aes(x= Probe, y = grip_release_time, color=factor(Env), group = factor(Env)))+
+  geom_errorbar(aes(x= Probe, ymin = grip_release_time_min, ymax = grip_release_time_max, color=factor(Env) ), width = 0)+
+  xlab('Probe Trial')+ylab('Grip Ramp Down Time (ms)')+
+  scale_x_discrete(breaks= c(0,1), labels=c("Environment", "Probe"))+
+  scale_color_discrete(name='Environment',breaks = c(0,1), labels=c('Low Effort', 'High Effort')) +th
+
+
+
+```
+## Ramp up time
+
+```{r}
+ggplot(data=agg_all)+geom_line(aes(x= Probe, y = grip_ramp_up_dur, color=factor(Env), group = factor(Env)))+
+  geom_errorbar(aes(x= Probe, ymin = grip_ramp_up_dur_min, ymax = grip_ramp_up_dur_max, color=factor(Env) ), width = 0)+
+  xlab('Probe Trial')+ylab('Grip Ramp Up Time (ms)')+
+  scale_x_discrete(breaks= c(0,1), labels=c("Environment", "Probe"))+
+  scale_color_discrete(name='Environment',breaks = c(0,1), labels=c('Low Effort', 'High Effort')) +th
+
+```
+
+
+
+## Next - transition from environment to probe (end of probe period)
+
+```{r}
+trials_cons = c(20, 21, 70, 71, 120, 121, 170, 171) + 10
+
+data_less_trials <- data[data$Trial %in% trials_cons, ]
+
+agg_all = aggregate(data=data_less_trials, cbind(grip_ramp_up_dur, grip_release_time) ~ Env +Probe  , mean )
+
+cnames = colnames(agg_all)
+agg_sd_all = aggregate(data=data_less_trials, cbind(grip_ramp_up_dur, grip_release_time) ~ Env  +Probe  , st.err )
+
+
+
+varlist = c('grip_ramp_up_dur', 'grip_release_time')
+
+varlist
+for (i in 1:length(varlist)) {
+  v= varlist[i]
+  max_varname = paste(v,'_max', sep="")
+  min_varname = paste(v,'_min', sep="")
+  print(min_varname)
+  agg_all = cbind.data.frame(agg_all, agg_all[v] - agg_sd_all[v], agg_all[v] + agg_sd_all[v])
+  cnames = c(cnames, min_varname, max_varname)
+  
+}
+
+colnames(agg_all) <- cnames
+
+agg_all$Probe <- as.factor(agg_all$Probe)
+
+ggplot(data=agg_all)+geom_line(aes(x= Probe, y = grip_release_time, color=factor(Env), group = factor(Env)))+
+  geom_errorbar(aes(x= Probe, ymin = grip_release_time_min, ymax = grip_release_time_max, color=factor(Env) ), width = 0)+
+  xlab('Probe Trial')+ylab('Grip Ramp Down Time (ms)')+
+  scale_x_discrete(breaks= c(0,1), labels=c("Environment", "Probe"))+
+  scale_color_discrete(name='Environment', breaks = c(0,1), labels=c('Low Effort', 'High Effort')) +th
+
+
+```
+## Ramp up time
+
+```{r}
+ggplot(data=agg_all)+geom_line(aes(x= Probe, y = grip_ramp_up_dur, color=factor(Env), group = factor(Env)))+
+  geom_errorbar(aes(x= Probe, ymin = grip_ramp_up_dur_min, ymax = grip_ramp_up_dur_max, color=factor(Env) ), width = 0)+
+  xlab('Probe Trial')+ylab('Grip Ramp Up Time (ms)')+
+  scale_x_discrete(breaks= c(0,1), labels=c("Environment", "Probe"))+
+  scale_color_discrete(name='Environment',breaks = c(0,1), labels=c('Low Effort', 'High Effort')) +th
+
+```
+

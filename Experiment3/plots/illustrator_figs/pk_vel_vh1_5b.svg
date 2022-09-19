@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generator: Adobe Illustrator 23.0.1, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 216 144" style="enable-background:new 0 0 216 144;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:#F0A339;stroke:#0985C8;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st1{fill:none;stroke:#F0A339;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st2{fill:none;stroke:#0985C8;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st3{fill:none;stroke:#000000;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st4{font-family:'GillSansMT';}
+	.st5{font-size:5.8313px;}
+	.st6{fill:none;stroke:#000000;stroke-width:1.07;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st7{fill:none;stroke:#000000;stroke-linejoin:round;stroke-miterlimit:10;}
+	.st8{font-size:5.6938px;}
+	.st9{font-size:7.7751px;}
+</style>
+<g>
+	<line class="st0" x1="70.06" y1="25.35" x2="113.89" y2="69.06"/>
+	<line class="st1" x1="118.5" y1="82.22" x2="162.32" y2="106.04"/>
+	<line class="st2" x1="70.06" y1="6.77" x2="70.06" y2="6.77"/>
+	<line class="st0" x1="70.06" y1="6.77" x2="70.06" y2="43.93"/>
+	<line class="st0" x1="70.06" y1="43.93" x2="70.06" y2="43.93"/>
+	<line class="st1" x1="118.5" y1="67.41" x2="118.5" y2="67.41"/>
+	<line class="st1" x1="118.5" y1="67.41" x2="118.5" y2="97.04"/>
+	<line class="st1" x1="118.5" y1="97.04" x2="118.5" y2="97.04"/>
+	<line class="st0" x1="113.89" y1="52.78" x2="113.89" y2="52.78"/>
+	<line class="st0" x1="113.89" y1="52.78" x2="113.89" y2="85.35"/>
+	<line class="st0" x1="113.89" y1="85.35" x2="113.89" y2="85.35"/>
+	<line class="st1" x1="162.32" y1="92.51" x2="162.32" y2="92.51"/>
+	<line class="st1" x1="162.32" y1="92.51" x2="162.32" y2="119.56"/>
+	<line class="st1" x1="162.32" y1="119.56" x2="162.32" y2="119.56"/>
+	<line class="st3" x1="42.38" y1="125.2" x2="42.38" y2="1.13"/>
+	<text transform="matrix(1 0 0 1 28.3564 117.4961)" class="st4 st5">0.55</text>
+	<text transform="matrix(1 0 0 1 28.3564 92.9023)" class="st4 st5">0.60</text>
+	<text transform="matrix(1 0 0 1 28.3564 68.3091)" class="st4 st5">0.65</text>
+	<text transform="matrix(1 0 0 1 28.3564 43.7144)" class="st4 st5">0.70</text>
+	<text transform="matrix(1 0 0 1 28.3564 19.1211)" class="st4 st5">0.75</text>
+	<line class="st6" x1="40.97" y1="115.45" x2="42.85" y2="115.45"/>
+	<line class="st6" x1="40.97" y1="90.86" x2="42.85" y2="90.86"/>
+	<line class="st6" x1="40.97" y1="66.26" x2="42.85" y2="66.26"/>
+	<line class="st6" x1="40.97" y1="41.67" x2="42.85" y2="41.67"/>
+	<line class="st6" x1="40.97" y1="17.08" x2="42.85" y2="17.08"/>
+	<line class="st7" x1="42.38" y1="125.2" x2="190" y2="125.2"/>
+	<line class="st6" x1="70.06" y1="126.54" x2="70.06" y2="125.02"/>
+	<line class="st6" x1="116.19" y1="126.54" x2="116.19" y2="125.02"/>
+	<line class="st6" x1="162.32" y1="126.54" x2="162.32" y2="125.02"/>
+	<text transform="matrix(1 0 0 1 68.4771 132.2383)" class="st4 st8">0</text>
+	<text transform="matrix(1 0 0 1 114.6104 132.2383)" class="st4 st8">2</text>
+	<text transform="matrix(1 0 0 1 158.3652 132.2383)" class="st4 st8">3.5</text>
+	<text transform="matrix(1 0 0 1 91.0259 141.7227)"><tspan x="0" y="0" class="st4 st9">A</tspan><tspan x="5.19" y="0" class="st4 st9">d</tspan><tspan x="9.08" y="0" class="st4 st9">ded Mass(kg)</tspan></text>
+	<text transform="matrix(0 -1 1 0 23.6689 93.2393)"><tspan x="0" y="0" class="st4 st9">P</tspan><tspan x="3.73" y="0" class="st4 st9">eak </tspan><tspan x="16.66" y="0" class="st4 st9">V</tspan><tspan x="20.97" y="0" class="st4 st9">elocity (m/s)</tspan></text>
+</g>
+</svg>

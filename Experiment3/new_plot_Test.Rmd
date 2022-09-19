@@ -7,6 +7,9 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+root_dir = getwd()
+knitr::opts_chunk$set(root.dir=root_dir)
 # Load necessary libraries
 library('ggplot2')
 require('reshape2')
@@ -28,7 +31,7 @@ st.err <- function(x) {
   sd(x)/sqrt(length(x))
 }
 
-data = read.csv(file='expeirment3_data')
+data = read.csv(file='expeirment3_data.csv')
 data$Probe <- as.factor(data$Probe)
 data$Subj_id <- as.factor(data$Subj_id)
 data$Order <- as.factor(data$Order)
@@ -332,7 +335,7 @@ p_block <- ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y= pk_norm_avg,
 
 p_block 
 
-fn = file.path('..','plots','pv_norm_trial_block.pdf',fsep='/' )
+fn = file.path('plots','pv_norm_trial_block.pdf',fsep='/' )
 ggsave(filename=fn,plot = p_block , device="pdf", width=8, height =6 )
 
 
@@ -351,7 +354,7 @@ p_diff <- ggplot(data=agg_all)+geom_line(aes(x= trial_in_block, y=pv_diff ))+
 
 p_diff
 
-fn = file.path('..','plots','pv_diff_trial_block.pdf',fsep='/' )
+fn = file.path('plots','pv_diff_trial_block.pdf',fsep='/' )
 ggsave(filename=fn,plot = p_diff , device="pdf", width=8, height =6 )
 
 ```
